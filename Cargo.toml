@@ -5,8 +5,7 @@ authors = ["Teoh Han Hui <teohhanhui@gmail.com>"]
 edition = "2018"
 readme = "README.md"
 repository = "https://github.com/teohhanhui/stocker"
-license = "MIT"
-license-file = "LICENSE"
+license = "MIT OR Apache-2.0"
 keywords = ["finance", "stocks", "dashboard"]
 categories = ["command-line-utilities", "visualization"]
 
