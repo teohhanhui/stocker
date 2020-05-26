@@ -1,0 +1,17 @@
+[package]
+name = "stocker"
+version = "0.1.0"
+authors = ["Teoh Han Hui <teohhanhui@gmail.com>"]
+edition = "2018"
+readme = "README.md"
+repository = "https://github.com/teohhanhui/stocker"
+license = "MIT"
+license-file = "LICENSE"
+keywords = ["finance", "stocks", "dashboard"]
+categories = ["command-line-utilities", "visualization"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+tui = "0.9.5"
+yahoo-finance = "0.2.0"
