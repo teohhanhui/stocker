@@ -1,6 +1,6 @@
 #   Stocker
 
-WIP
+Stocks dashboard
 
 ##  License
 

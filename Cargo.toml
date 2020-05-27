@@ -3,6 +3,7 @@ name = "stocker"
 version = "0.1.0"
 authors = ["Teoh Han Hui <teohhanhui@gmail.com>"]
 edition = "2018"
+description = "Stocks dashboard"
 readme = "README.md"
 repository = "https://github.com/teohhanhui/stocker"
 license = "MIT OR Apache-2.0"
@@ -12,5 +13,10 @@ categories = ["command-line-utilities", "visualization"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-tui = "0.9.5"
+argh = "0.1.3"
+chrono = "0.4.11"
+crossterm = "0.17.5"
+libmath = "0.2.1"
+tokio = "0.2.21"
+tui = { version = "0.9.5", default-features = false, features = ['crossterm'] }
 yahoo-finance = "0.2.0"
