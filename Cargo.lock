@@ -1216,7 +1216,7 @@ checksum = "213701ba3370744dcd1a12960caa4843b3d68b4d1c0a5d575e0d65b2ee9d16c0"
 
 [[package]]
 name = "stocker"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "argh",
  "chrono",
@@ -1358,8 +1358,7 @@ dependencies = [
 [[package]]
 name = "tui"
 version = "0.9.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9533d39bef0ae8f510e8a99d78702e68d1bbf0b98a78ec9740509d287010ae1e"
+source = "git+https://github.com/fdehau/tui-rs#4fe647df0aabfffd4e8612f503bab3664e2b64eb"
 dependencies = [
  "bitflags",
  "cassowary",

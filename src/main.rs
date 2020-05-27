@@ -13,8 +13,9 @@ use std::time::{Duration as StdDuration, Instant};
 use tui::{
     backend::{self, CrosstermBackend},
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Modifier, Style},
-    widgets::{Axis, Block, Borders, Chart, Dataset, Paragraph, Text},
+    style::{Color, Modifier, Style},
+    symbols::Marker,
+    widgets::{Axis, Block, Borders, Chart, Dataset, GraphType, Paragraph, Text},
     Frame, Terminal,
 };
 use yahoo_finance::{history, realtime::Quote, Bar, Interval};
@@ -129,7 +130,12 @@ fn draw_header_block<B: backend::Backend>(
 ) {
     let symbol_texts = vec![Text::raw(stock.symbol.clone())];
     let symbol_paragraph = Paragraph::new(symbol_texts.iter())
-        .block(Block::default().title("Symbol").borders(Borders::ALL))
+        .block(
+            Block::default()
+                .title("Symbol")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        )
         .style(Style::default().modifier(Modifier::BOLD))
         .alignment(Alignment::Center);
     f.render_widget(symbol_paragraph, area);
@@ -151,7 +157,11 @@ fn draw_body_block<B: backend::Backend>(
             )
         })
         .collect::<Vec<_>>();
-    let historical_prices_datasets = [Dataset::default().data(&historical_prices_data)];
+    let historical_prices_datasets = [Dataset::default()
+        .marker(Marker::Braille)
+        .style(Style::default().fg(Color::Blue))
+        .graph_type(GraphType::Line)
+        .data(&historical_prices_data)];
     let min_timestamp = historical_prices_data
         .clone()
         .into_iter()
@@ -187,7 +197,8 @@ fn draw_body_block<B: backend::Backend>(
         .block(
             Block::default()
                 .title("Historical Prices")
-                .borders(Borders::ALL),
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray)),
         )
         .x_axis(Axis::default().bounds(x_axis_bounds).labels(&x_axis_labels))
         .y_axis(Axis::default().bounds(y_axis_bounds).labels(&y_axis_labels))
@@ -203,7 +214,12 @@ fn draw_footer_block<B: backend::Backend>(
 ) {
     let time_frame_texts = vec![Text::raw(ui_state.time_frame.to_string())];
     let time_frame_paragraph = Paragraph::new(time_frame_texts.iter())
-        .block(Block::default().title("Time Frame").borders(Borders::ALL))
+        .block(
+            Block::default()
+                .title("Time Frame")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::DarkGray)),
+        )
         .alignment(Alignment::Center);
     f.render_widget(time_frame_paragraph, area);
 }
