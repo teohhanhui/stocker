@@ -14,7 +14,8 @@ use tui::{
     backend::{self, CrosstermBackend},
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Modifier, Style},
-    widgets::{Axis, Block, Borders, Chart, Dataset, Paragraph, Text},
+    symbols::Marker,
+    widgets::{Axis, Block, Borders, Chart, Dataset, GraphType, Paragraph, Text},
     Frame, Terminal,
 };
 use yahoo_finance::{history, realtime::Quote, Bar, Interval};
@@ -151,7 +152,10 @@ fn draw_body_block<B: backend::Backend>(
             )
         })
         .collect::<Vec<_>>();
-    let historical_prices_datasets = [Dataset::default().data(&historical_prices_data)];
+    let historical_prices_datasets = [Dataset::default()
+        .graph_type(GraphType::Line)
+        .marker(Marker::Braille)
+        .data(&historical_prices_data)];
     let min_timestamp = historical_prices_data
         .clone()
         .into_iter()
