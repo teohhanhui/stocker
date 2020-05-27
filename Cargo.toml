@@ -1,6 +1,6 @@
 [package]
 name = "stocker"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["Teoh Han Hui <teohhanhui@gmail.com>"]
 edition = "2018"
 description = "Stocks dashboard"
@@ -19,7 +19,8 @@ crossterm = "0.17.5"
 libmath = "0.2.1"
 tokio = "0.2.21"
 tui = { version = "0.9.5", default-features = false, features = ['crossterm'] }
-yahoo-finance = "0.2.0"
+yahoo-finance = "0.3.0"
 
 [patch.crates-io]
 tui = { git = "https://github.com/fdehau/tui-rs" }
+yahoo-finance = { git = "https://github.com/fbriden/yahoo-finance-rs" }

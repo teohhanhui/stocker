@@ -18,7 +18,7 @@ use tui::{
     widgets::{Axis, Block, Borders, Chart, Dataset, GraphType, Paragraph, Text},
     Frame, Terminal,
 };
-use yahoo_finance::{history, realtime::Quote, Bar, Interval};
+use yahoo_finance::{history, Bar, Interval, Profile, Quote, Timestamped};
 
 const DEFAULT_SYMBOL: &str = "TSLA";
 const DEFAULT_TIME_FRAME: &str = "1mo";
@@ -74,6 +74,7 @@ enum InputEvent {
 #[derive(Debug)]
 struct Stock {
     bars: Vec<Bar>,
+    profile: Option<Profile>,
     quote: Option<Quote>,
     symbol: String,
 }
@@ -108,11 +109,10 @@ fn draw<B: backend::Backend>(
     terminal.draw(|mut f| {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .margin(1)
             .constraints(vec![
-                Constraint::Length(3),
+                Constraint::Length(2),
                 Constraint::Min(5),
-                Constraint::Length(3),
+                Constraint::Length(2),
             ])
             .split(f.size());
 
@@ -128,17 +128,32 @@ fn draw_header_block<B: backend::Backend>(
     stock: &Stock,
     area: Rect,
 ) {
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .horizontal_margin(1)
+        .constraints(vec![Constraint::Length(10), Constraint::Length(20)])
+        .split(area);
+
+    let header_base_style = Style::default().fg(Color::White).bg(Color::DarkGray);
+
+    let header_block = Block::default().style(header_base_style);
+    f.render_widget(header_block, area);
+
     let symbol_texts = vec![Text::raw(stock.symbol.clone())];
     let symbol_paragraph = Paragraph::new(symbol_texts.iter())
-        .block(
-            Block::default()
-                .title("Symbol")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray)),
-        )
-        .style(Style::default().modifier(Modifier::BOLD))
-        .alignment(Alignment::Center);
-    f.render_widget(symbol_paragraph, area);
+        .block(Block::default().style(header_base_style))
+        .style(header_base_style.clone().modifier(Modifier::BOLD));
+    f.render_widget(symbol_paragraph, chunks[0]);
+
+    let name_texts = vec![Text::raw(match &stock.profile {
+        Some(Profile::Company(company)) => company.name.clone(),
+        Some(Profile::Fund(fund)) => fund.name.clone(),
+        None => "".to_owned(),
+    })];
+    let name_paragraph = Paragraph::new(name_texts.iter())
+        .block(Block::default().style(header_base_style))
+        .style(header_base_style);
+    f.render_widget(name_paragraph, chunks[1]);
 }
 
 fn draw_body_block<B: backend::Backend>(
@@ -152,14 +167,14 @@ fn draw_body_block<B: backend::Backend>(
         .iter()
         .map(|bar| {
             (
-                bar.timestamp.timestamp() as f64,
+                bar.timestamp_seconds() as f64,
                 round::half_to_even(bar.close, 2),
             )
         })
         .collect::<Vec<_>>();
     let historical_prices_datasets = [Dataset::default()
         .marker(Marker::Braille)
-        .style(Style::default().fg(Color::Blue))
+        .style(Style::default().fg(Color::Cyan))
         .graph_type(GraphType::Line)
         .data(&historical_prices_data)];
     let min_timestamp = historical_prices_data
@@ -198,7 +213,7 @@ fn draw_body_block<B: backend::Backend>(
             Block::default()
                 .title("Historical Prices")
                 .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray)),
+                .border_style(Style::default().fg(Color::Gray)),
         )
         .x_axis(Axis::default().bounds(x_axis_bounds).labels(&x_axis_labels))
         .y_axis(Axis::default().bounds(y_axis_bounds).labels(&y_axis_labels))
@@ -212,15 +227,13 @@ fn draw_footer_block<B: backend::Backend>(
     stock: &Stock,
     area: Rect,
 ) {
-    let time_frame_texts = vec![Text::raw(ui_state.time_frame.to_string())];
+    let time_frame_texts = vec![
+        Text::styled("Time frame: ", Style::default().fg(Color::Gray)),
+        Text::raw(ui_state.time_frame.to_string()),
+    ];
     let time_frame_paragraph = Paragraph::new(time_frame_texts.iter())
-        .block(
-            Block::default()
-                .title("Time Frame")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::DarkGray)),
-        )
-        .alignment(Alignment::Center);
+        .block(Block::default())
+        .alignment(Alignment::Right);
     f.render_widget(time_frame_paragraph, area);
 }
 
@@ -247,14 +260,20 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let mut stock = Stock {
         bars: vec![],
+        profile: None,
         quote: None,
         symbol: args.symbol,
     };
 
+    stock.profile = Profile::load(stock.symbol.as_str())
+        .await
+        .map_or(None, Some);
+
     stock.bars = history::retrieve_interval(
         stock.symbol.as_str(),
         time_frame_as_interval(ui_state.time_frame.to_string().as_str())?, // hacky hack
-    )?;
+    )
+    .await?;
 
     loop {
         match read_input(&mut ui_state)? {
