@@ -1,4 +1,7 @@
-use crate::app::{App, Stock, UiState};
+use crate::{
+    app::{App, MenuState, TimeFrame, UiState},
+    stock::Stock,
+};
 use argh::FromArgs;
 use crossterm::{
     event::{self, Event as CrosstermEvent, KeyCode, KeyEvent},
@@ -7,12 +10,14 @@ use crossterm::{
 };
 use std::error::Error;
 use std::io::{self, Write};
-use std::time::{Duration as StdDuration, Instant};
+use std::str::FromStr;
+use std::time::{Duration, Instant};
+use strum::IntoEnumIterator;
 use tokio::sync::mpsc;
 use tui::{backend::CrosstermBackend, Terminal};
-use yahoo_finance::{history, Interval, Profile};
 
 mod app;
+mod stock;
 mod ui;
 
 const DEFAULT_SYMBOL: &str = "TSLA";
@@ -29,34 +34,14 @@ struct Args {
     #[argh(
         option,
         short = 't',
-        default = "time_frame_as_interval(DEFAULT_TIME_FRAME).unwrap()",
-        from_str_fn(time_frame_as_interval)
+        default = "TimeFrame::from_str(DEFAULT_TIME_FRAME).unwrap()"
     )]
-    time_frame: Interval,
-}
-
-fn time_frame_as_interval(time_frame: &str) -> Result<Interval, String> {
-    Ok(match time_frame {
-        "1d" => Interval::_1d,
-        "5d" => Interval::_5d,
-        "1mo" => Interval::_1mo,
-        "3mo" => Interval::_3mo,
-        "6mo" => Interval::_6mo,
-        "1y" => Interval::_1y,
-        "2y" => Interval::_2y,
-        "5y" => Interval::_5y,
-        "10y" => Interval::_10y,
-        "ytd" => Interval::_ytd,
-        "max" => Interval::_max,
-        t => {
-            return Err(format!("unrecognized time frame {}", t));
-        }
-    })
+    time_frame: TimeFrame,
 }
 
 #[derive(Debug)]
 enum InputEvent {
-    Input(char),
+    Input(CrosstermEvent),
     Tick,
 }
 
@@ -79,6 +64,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let mut app = App {
         ui_state: UiState {
             time_frame: args.time_frame,
+            time_frame_menu_state: {
+                let menu_state = MenuState::new(TimeFrame::iter());
+                menu_state.select(args.time_frame).unwrap();
+                menu_state
+            },
         },
         stock: Stock {
             bars: vec![],
@@ -88,27 +78,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
         },
     };
 
-    app.stock.profile = Some(Profile::load(app.stock.symbol.as_str()).await?);
+    app.stock.load_profile().await?;
 
-    app.stock.bars = history::retrieve_interval(
-        app.stock.symbol.as_str(),
-        time_frame_as_interval(app.ui_state.time_frame.to_string().as_str())?, // hacky hack
-    )
-    .await?;
+    app.stock
+        .load_historical_prices(app.ui_state.time_frame)
+        .await?;
 
-    let tick_rate = StdDuration::from_millis(TICK_RATE);
+    let tick_rate = Duration::from_millis(TICK_RATE);
 
     tokio::spawn(async move {
         let mut last_tick = Instant::now();
 
         loop {
             if event::poll(tick_rate).unwrap_or(false) {
-                if let Ok(CrosstermEvent::Key(KeyEvent {
-                    code: KeyCode::Char(c),
-                    ..
-                })) = event::read()
-                {
-                    if tx.send(InputEvent::Input(c)).await.is_err() {
+                if let Ok(ev) = event::read() {
+                    if tx.send(InputEvent::Input(ev)).await.is_err() {
                         break;
                     }
                 }
@@ -127,9 +111,53 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     loop {
         match rx.recv().await.unwrap() {
-            InputEvent::Input('q') => {
-                break;
-            }
+            InputEvent::Input(CrosstermEvent::Key(KeyEvent { code, .. })) => match code {
+                KeyCode::Enter => {
+                    if let ref mut menu_state @ MenuState { active: true, .. } =
+                        app.ui_state.time_frame_menu_state
+                    {
+                        app.ui_state.time_frame = menu_state.selected().unwrap();
+
+                        menu_state.active = false;
+                        menu_state.clear_selection();
+                        menu_state.select(app.ui_state.time_frame).unwrap();
+
+                        app.stock
+                            .load_historical_prices(app.ui_state.time_frame)
+                            .await?;
+                    }
+                }
+                KeyCode::Up => {
+                    if let ref mut menu_state @ MenuState { active: true, .. } =
+                        app.ui_state.time_frame_menu_state
+                    {
+                        menu_state.select_prev();
+                    }
+                }
+                KeyCode::Down => {
+                    if let ref mut menu_state @ MenuState { active: true, .. } =
+                        app.ui_state.time_frame_menu_state
+                    {
+                        menu_state.select_next();
+                    }
+                }
+                KeyCode::Char('q') => {
+                    break;
+                }
+                KeyCode::Char('t') => {
+                    app.ui_state.time_frame_menu_state.active = true;
+                }
+                KeyCode::Esc => {
+                    if let ref mut menu_state @ MenuState { active: true, .. } =
+                        app.ui_state.time_frame_menu_state
+                    {
+                        menu_state.active = false;
+                        menu_state.clear_selection();
+                        menu_state.select(app.ui_state.time_frame).unwrap();
+                    }
+                }
+                _ => {}
+            },
             InputEvent::Input(_) => {}
             InputEvent::Tick => {}
         };
