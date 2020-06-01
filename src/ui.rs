@@ -1,4 +1,4 @@
-use crate::app::{App, TimeFrame};
+use crate::app::{App, TimeFrame, UiState, UiTarget};
 use chrono::{TimeZone, Utc};
 use math::round;
 use std::cmp::{self, Ordering};
@@ -29,37 +29,54 @@ pub fn draw<B: Backend>(f: &mut Frame<B>, app: &App) {
     draw_header(f, app, header_area);
     draw_body(f, app, body_area);
     draw_footer(f, app, footer_area);
+    draw_overlay(f, app);
 }
 
-fn draw_header<B: Backend>(f: &mut Frame<B>, App { stock, .. }: &App, area: Rect) {
+fn draw_header<B: Backend>(
+    f: &mut Frame<B>,
+    App {
+        stock,
+        ui_state: UiState { target_areas, .. },
+        ..
+    }: &App,
+    area: Rect,
+) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .horizontal_margin(1)
         .constraints(vec![Constraint::Length(10), Constraint::Length(20)])
         .split(area);
-    let symbol_area = chunks[0];
-    let name_area = chunks[1];
+    let stock_symbol_area = chunks[0];
+    let stock_name_area = chunks[1];
 
     let header_base_style = Style::default().fg(Color::White).bg(Color::DarkGray);
 
     let header_block = Block::default().style(header_base_style);
     f.render_widget(header_block, area);
 
-    let symbol_texts = vec![Text::raw(stock.symbol.clone())];
-    let symbol_paragraph = Paragraph::new(symbol_texts.iter())
+    let stock_symbol_texts = vec![Text::raw(stock.symbol.as_str())];
+    let stock_symbol_paragraph = Paragraph::new(stock_symbol_texts.iter())
         .block(Block::default().style(header_base_style))
         .style(header_base_style.clone().modifier(Modifier::BOLD));
-    f.render_widget(symbol_paragraph, symbol_area);
+    f.render_widget(stock_symbol_paragraph, stock_symbol_area);
 
-    let name_texts = vec![Text::raw(match &stock.profile {
-        Some(Profile::Company(company)) => company.name.clone(),
-        Some(Profile::Fund(fund)) => fund.name.clone(),
-        None => "".to_owned(),
+    target_areas
+        .write()
+        .insert(UiTarget::StockSymbol, stock_symbol_area);
+
+    let stock_name_texts = vec![Text::raw(match &stock.profile {
+        Some(Profile::Company(company)) => company.name.as_str(),
+        Some(Profile::Fund(fund)) => fund.name.as_str(),
+        None => "",
     })];
-    let name_paragraph = Paragraph::new(name_texts.iter())
+    let stock_name_paragraph = Paragraph::new(stock_name_texts.iter())
         .block(Block::default().style(header_base_style))
         .style(header_base_style);
-    f.render_widget(name_paragraph, name_area);
+    f.render_widget(stock_name_paragraph, stock_name_area);
+
+    target_areas
+        .write()
+        .insert(UiTarget::StockName, stock_name_area);
 }
 
 fn draw_body<B: Backend>(f: &mut Frame<B>, App { stock, .. }: &App, area: Rect) {
@@ -76,7 +93,15 @@ fn draw_body<B: Backend>(f: &mut Frame<B>, App { stock, .. }: &App, area: Rect) 
         .collect::<Vec<_>>();
     let historical_prices_datasets = [Dataset::default()
         .marker(Marker::Braille)
-        .style(Style::default().fg(Color::Cyan))
+        .style(Style::default().fg({
+            let (_, first_price) = historical_prices_data.first().unwrap_or(&(0f64, 0f64));
+            let (_, last_price) = historical_prices_data.last().unwrap_or(&(0f64, 0f64));
+            if last_price >= first_price {
+                Color::Green
+            } else {
+                Color::Red
+            }
+        }))
         .graph_type(GraphType::Line)
         .data(&historical_prices_data)];
 
@@ -127,14 +152,23 @@ fn draw_body<B: Backend>(f: &mut Frame<B>, App { stock, .. }: &App, area: Rect) 
     f.render_widget(historical_prices_chart, area);
 }
 
-fn draw_footer<B: Backend>(f: &mut Frame<B>, App { ui_state, .. }: &App, area: Rect) {
+fn draw_footer<B: Backend>(
+    f: &mut Frame<B>,
+    App {
+        ui_state:
+            UiState {
+                target_areas,
+                time_frame,
+                time_frame_menu_state,
+                ..
+            },
+        ..
+    }: &App,
+    area: Rect,
+) {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .horizontal_margin(if ui_state.time_frame_menu_state.active {
-            0
-        } else {
-            1
-        })
+        .horizontal_margin(if time_frame_menu_state.active { 0 } else { 1 })
         .constraints(vec![Constraint::Min(5), Constraint::Length(20)])
         .split(area);
     let time_frame_area = chunks[1];
@@ -144,15 +178,15 @@ fn draw_footer<B: Backend>(f: &mut Frame<B>, App { ui_state, .. }: &App, area: R
     let time_frame_texts = vec![
         Text::styled(
             "Time frame: ",
-            if ui_state.time_frame_menu_state.active {
+            if time_frame_menu_state.active {
                 menu_active_base_style
             } else {
                 Style::default()
             },
         ),
         Text::styled(
-            ui_state.time_frame.to_string(),
-            if ui_state.time_frame_menu_state.active {
+            time_frame.to_string(),
+            if time_frame_menu_state.active {
                 menu_active_base_style
             } else {
                 Style::default()
@@ -160,9 +194,9 @@ fn draw_footer<B: Backend>(f: &mut Frame<B>, App { ui_state, .. }: &App, area: R
         ),
     ];
     let time_frame_paragraph = Paragraph::new(time_frame_texts.iter())
-        .block(if ui_state.time_frame_menu_state.active {
+        .block(if time_frame_menu_state.active {
             Block::default()
-                .style(if ui_state.time_frame_menu_state.active {
+                .style(if time_frame_menu_state.active {
                     menu_active_base_style
                 } else {
                     Style::default()
@@ -172,7 +206,7 @@ fn draw_footer<B: Backend>(f: &mut Frame<B>, App { ui_state, .. }: &App, area: R
         } else {
             Block::default()
         })
-        .style(if ui_state.time_frame_menu_state.active {
+        .style(if time_frame_menu_state.active {
             menu_active_base_style
         } else {
             Style::default()
@@ -180,9 +214,61 @@ fn draw_footer<B: Backend>(f: &mut Frame<B>, App { ui_state, .. }: &App, area: R
         .alignment(Alignment::Right);
     f.render_widget(time_frame_paragraph, time_frame_area);
 
-    if ui_state.time_frame_menu_state.active {
-        let time_frame_menu_items = TimeFrame::iter().map(|t| Text::raw(t.to_string()));
+    target_areas
+        .write()
+        .insert(UiTarget::TimeFrame, time_frame_area);
+}
 
+fn draw_overlay<B: Backend>(
+    f: &mut Frame<B>,
+    App {
+        ui_state:
+            UiState {
+                stock_symbol_input_state,
+                target_areas,
+                time_frame_menu_state,
+                ..
+            },
+        ..
+    }: &App,
+) {
+    let active_base_style = Style::default().fg(Color::White).bg(Color::DarkGray);
+    let highlight_base_style = Style::default().fg(Color::Black).bg(Color::White);
+
+    if stock_symbol_input_state.active {
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .constraints(vec![Constraint::Length(30), Constraint::Min(5)])
+            .split(f.size());
+        let stock_symbol_input_area = chunks[0];
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints(vec![
+                Constraint::Length(1),
+                Constraint::Length(3),
+                Constraint::Min(5),
+            ])
+            .split(stock_symbol_input_area);
+        let stock_symbol_input_area = chunks[1];
+
+        let stock_symbol_input_texts = vec![Text::raw(stock_symbol_input_state.value.as_str())];
+        let stock_symbol_input_paragraph = Paragraph::new(stock_symbol_input_texts.iter())
+            .block(
+                Block::default()
+                    .style(active_base_style)
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Gray)),
+            )
+            .style(active_base_style);
+        f.render_widget(Clear, stock_symbol_input_area);
+        f.render_widget(stock_symbol_input_paragraph, stock_symbol_input_area);
+
+        target_areas
+            .write()
+            .insert(UiTarget::StockSymbolInput, stock_symbol_input_area);
+    }
+
+    if time_frame_menu_state.active {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints(vec![Constraint::Min(5), Constraint::Length(20)])
@@ -192,26 +278,30 @@ fn draw_footer<B: Backend>(f: &mut Frame<B>, App { ui_state, .. }: &App, area: R
             .direction(Direction::Vertical)
             .constraints(vec![
                 Constraint::Min(5),
-                Constraint::Length(cmp::min(TimeFrame::iter().count() as u16 + 2, 10)),
+                Constraint::Length(cmp::min(TimeFrame::iter().count() as u16 + 2, 12)),
                 Constraint::Length(2),
             ])
             .split(time_frame_menu_area);
         let time_frame_menu_area = chunks[1];
 
+        let time_frame_menu_items = TimeFrame::iter().map(|t| Text::raw(t.to_string()));
         let time_frame_menu_list = List::new(time_frame_menu_items)
             .block(
                 Block::default()
                     .borders(Borders::ALL)
                     .border_style(Style::default().fg(Color::Gray)),
             )
-            .style(Style::default().bg(Color::Reset))
-            .highlight_style(Style::default().fg(Color::Black).bg(Color::LightCyan));
+            .highlight_style(highlight_base_style);
 
         f.render_widget(Clear, time_frame_menu_area);
         f.render_stateful_widget(
             time_frame_menu_list,
             time_frame_menu_area,
-            &mut *ui_state.time_frame_menu_state.list_state_write(),
+            &mut *time_frame_menu_state.list_state_write(),
         );
+
+        target_areas
+            .write()
+            .insert(UiTarget::TimeFrameMenu, time_frame_menu_area);
     }
 }

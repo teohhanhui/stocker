@@ -1,14 +1,23 @@
 use crate::stock::Stock;
 use err_derive::Error;
+use im::ordmap::OrdMap;
+use parking_lot::{RwLock, RwLockWriteGuard};
+use std::cmp::Ordering;
 use std::fmt;
 use std::str::FromStr;
-use std::sync::{RwLock, RwLockWriteGuard};
 use strum_macros::EnumIter;
-use tui::widgets::ListState;
+use tui::{layout::Rect, widgets::ListState};
 use yahoo_finance::Interval;
+
+pub struct App {
+    pub stock: Stock,
+    pub ui_state: UiState,
+}
 
 #[derive(Debug)]
 pub struct UiState {
+    pub stock_symbol_input_state: InputState,
+    pub target_areas: RwLock<OrdMap<UiTarget, Rect>>,
     pub time_frame: TimeFrame,
     pub time_frame_menu_state: MenuState<TimeFrame>,
 }
@@ -39,34 +48,28 @@ where
     }
 
     pub fn selected(&self) -> Option<T> {
-        let selected = {
-            let list_state = self.list_state.read().unwrap();
-
-            list_state.selected()?
-        };
+        let selected = self.list_state.read().selected()?;
 
         Some(self.items[selected].clone())
     }
 
-    pub fn select(&self, item: T) -> Result<(), String> {
+    pub fn select(&self, item: T) {
         let n = self
             .items
             .iter()
             .cloned()
             .position(|t| t == item)
-            .ok_or_else(|| String::from("Item not found"))?;
+            .expect("item not found");
 
         self.select_nth(n);
-
-        Ok(())
     }
 
     pub fn select_prev(&self) {
-        let selected = {
-            let list_state = self.list_state.read().unwrap();
-
-            list_state.selected().unwrap()
-        };
+        let selected = self
+            .list_state
+            .read()
+            .selected()
+            .expect("cannot select previous item when nothing is selected");
 
         if selected > 0 {
             self.select_nth(selected - 1);
@@ -74,11 +77,11 @@ where
     }
 
     pub fn select_next(&self) {
-        let selected = {
-            let list_state = self.list_state.read().unwrap();
-
-            list_state.selected().unwrap()
-        };
+        let selected = self
+            .list_state
+            .read()
+            .selected()
+            .expect("cannot select next item when nothing is selected");
 
         if selected < self.items.len() - 1 {
             self.select_nth(selected + 1);
@@ -86,19 +89,68 @@ where
     }
 
     pub fn select_nth(&self, n: usize) {
-        let mut list_state = self.list_state.write().unwrap();
-
-        list_state.select(Some(n));
+        self.list_state.write().select(Some(n));
     }
 
     pub fn clear_selection(&self) {
-        let mut list_state = self.list_state.write().unwrap();
-
-        list_state.select(None);
+        self.list_state.write().select(None);
     }
 
     pub fn list_state_write(&self) -> RwLockWriteGuard<ListState> {
-        self.list_state.write().unwrap()
+        self.list_state.write()
+    }
+}
+
+#[derive(Debug)]
+pub struct InputState {
+    pub active: bool,
+    pub value: String,
+}
+
+impl Default for InputState {
+    fn default() -> Self {
+        Self {
+            active: false,
+            value: String::new(),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum UiTarget {
+    StockName,
+    StockSymbol,
+    StockSymbolInput,
+    TimeFrame,
+    TimeFrameMenu,
+}
+
+impl UiTarget {
+    pub fn zindex(self) -> i8 {
+        match self {
+            Self::StockName => 0,
+            Self::StockSymbol => 0,
+            Self::StockSymbolInput => 1,
+            Self::TimeFrame => 0,
+            Self::TimeFrameMenu => 1,
+        }
+    }
+}
+
+impl Ord for UiTarget {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let ordering = self.zindex().cmp(&other.zindex());
+        if ordering == Ordering::Equal {
+            (*self as isize).cmp(&(*other as isize))
+        } else {
+            ordering
+        }
+    }
+}
+
+impl PartialOrd for UiTarget {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
@@ -178,9 +230,4 @@ impl fmt::Display for TimeFrame {
             Self::_max => write!(f, "max"),
         }
     }
-}
-
-pub struct App {
-    pub stock: Stock,
-    pub ui_state: UiState,
 }
