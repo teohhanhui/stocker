@@ -1,4 +1,5 @@
 use crate::stock::Stock;
+use chrono::{DateTime, Duration, Utc};
 use err_derive::Error;
 use im::ordmap::OrdMap;
 use parking_lot::{RwLock, RwLockWriteGuard};
@@ -16,6 +17,7 @@ pub struct App {
 
 #[derive(Debug)]
 pub struct UiState {
+    pub end_date: DateTime<Utc>,
     pub stock_symbol_input_state: InputState,
     pub target_areas: RwLock<OrdMap<UiTarget, Rect>>,
     pub time_frame: TimeFrame,
@@ -169,6 +171,20 @@ pub enum TimeFrame {
 }
 
 impl TimeFrame {
+    pub fn duration(self) -> Option<Duration> {
+        match self {
+            Self::FiveDays => Some(Duration::days(5)),
+            Self::OneMonth => Some(Duration::days(30)),
+            Self::ThreeMonths => Some(Duration::days(30 * 3)),
+            Self::SixMonths => Some(Duration::days(30 * 6)),
+            Self::OneYear => Some(Duration::days(30 * 12)),
+            Self::TwoYears => Some(Duration::days(30 * 12 * 2)),
+            Self::FiveYears => Some(Duration::days(30 * 12 * 5)),
+            Self::TenYears => Some(Duration::days(30 * 12 * 10)),
+            _ => None,
+        }
+    }
+
     pub fn interval(self) -> Interval {
         match self {
             Self::FiveDays => Interval::_5d,
