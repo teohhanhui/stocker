@@ -4,17 +4,15 @@ use crate::{
 };
 use argh::FromArgs;
 use crossterm::{
-    cursor::{DisableBlinking, EnableBlinking},
-    event::{
-        self, DisableMouseCapture, EnableMouseCapture, KeyCode, KeyEvent, MouseButton, MouseEvent,
-    },
-    execute,
-    terminal::{self, EnterAlternateScreen, LeaveAlternateScreen},
+    cursor,
+    event::{self, KeyCode, KeyEvent, MouseButton, MouseEvent},
+    execute, terminal,
 };
 use im::ordmap;
 use parking_lot::RwLock;
 use std::error::Error;
 use std::io::{self, Write};
+use std::panic;
 use std::str::FromStr;
 use std::time::{Duration, Instant};
 use strum::IntoEnumIterator;
@@ -51,24 +49,82 @@ enum InputEvent {
     Tick,
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
-    let args: Args = argh::from_env();
-
-    terminal::enable_raw_mode()?;
-
+fn setup_terminal() {
     let mut stdout = io::stdout();
+
     execute!(
         stdout,
-        EnterAlternateScreen,
-        EnableMouseCapture,
-        DisableBlinking
-    )?;
+        terminal::EnterAlternateScreen,
+        cursor::Hide,
+        cursor::DisableBlinking,
+        event::EnableMouseCapture
+    )
+    .unwrap();
 
-    let backend = CrosstermBackend::new(stdout);
+    // Needed for when run in a TTY since TTYs don't actually have an alternate screen.
+    //
+    // Must be executed after attempting to enter the alternate screen so that it only clears the
+    // primary screen if we are running in a TTY.
+    //
+    // If not running in a TTY, then we just end up clearing the alternate screen which should have
+    // no effect.
+    execute!(stdout, terminal::Clear(terminal::ClearType::All)).unwrap();
 
+    terminal::enable_raw_mode().unwrap();
+}
+
+// Adapted from https://github.com/cjbassi/ytop/blob/89a210f0e5e2de6aa0e8d7a153a21f959d77607e/src/main.rs#L51-L66
+fn cleanup_terminal() {
+    let mut stdout = io::stdout();
+
+    // Needed for when run in a TTY since TTYs don't actually have an alternate screen.
+    //
+    // Must be executed before attempting to leave the alternate screen so that it only modifies the
+    // primary screen if we are running in a TTY.
+    //
+    // If not running in a TTY, then we just end up modifying the alternate screen which should have
+    // no effect.
+    execute!(
+        stdout,
+        cursor::MoveTo(0, 0),
+        terminal::Clear(terminal::ClearType::All)
+    )
+    .unwrap();
+
+    execute!(
+        stdout,
+        terminal::LeaveAlternateScreen,
+        cursor::Show,
+        cursor::EnableBlinking,
+        event::DisableMouseCapture
+    )
+    .unwrap();
+
+    terminal::disable_raw_mode().unwrap();
+}
+
+// Adapted from https://github.com/cjbassi/ytop/blob/89a210f0e5e2de6aa0e8d7a153a21f959d77607e/src/main.rs#L113-L120
+//
+// We need to catch panics since we need to close the UI and cleanup the terminal before logging any
+// error messages to the screen.
+fn setup_panic_hook() {
+    panic::set_hook(Box::new(|panic_info| {
+        cleanup_terminal();
+        better_panic::Settings::auto().create_panic_handler()(panic_info);
+    }));
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn Error>> {
+    better_panic::install();
+
+    let args: Args = argh::from_env();
+
+    let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
-    terminal.hide_cursor()?;
+
+    setup_panic_hook();
+    setup_terminal();
 
     let (mut tx, mut rx) = mpsc::channel(100);
 
@@ -136,24 +192,29 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         terminal.draw(|mut f| ui::draw(&mut f, &app))?;
 
-        terminal.hide_cursor()?;
-        execute!(terminal.backend_mut(), DisableBlinking)?;
+        execute!(
+            terminal.backend_mut(),
+            cursor::Hide,
+            cursor::DisableBlinking
+        )?;
 
         let stock_symbol_input_state = &mut app.ui_state.stock_symbol_input_state;
         let time_frame_menu_state = &mut app.ui_state.time_frame_menu_state;
 
         if stock_symbol_input_state.active {
-            terminal.show_cursor()?;
-
             let Rect { x, y, .. } = *target_areas
                 .read()
                 .get(&UiTarget::StockSymbolInput)
                 .unwrap();
-            terminal.set_cursor(
-                x + 1 + stock_symbol_input_state.value.chars().count() as u16,
-                y + 1,
+            let cx = x + 1 + stock_symbol_input_state.value.chars().count() as u16;
+            let cy = y + 1;
+
+            execute!(
+                terminal.backend_mut(),
+                cursor::Show,
+                cursor::MoveTo(cx, cy),
+                cursor::EnableBlinking
             )?;
-            execute!(terminal.backend_mut(), EnableBlinking)?;
         }
 
         match rx.recv().await.unwrap() {
@@ -166,7 +227,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
                     stock_symbol_input_state.active = false;
 
-                    execute!(terminal.backend_mut(), DisableBlinking)?;
+                    execute!(terminal.backend_mut(), cursor::DisableBlinking)?;
 
                     app.stock.load_profile().await?;
                     app.stock
@@ -264,15 +325,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture,
-        EnableBlinking,
-    )?;
-    terminal.show_cursor()?;
-
-    terminal::disable_raw_mode()?;
+    cleanup_terminal();
 
     Ok(())
 }
