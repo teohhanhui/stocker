@@ -154,34 +154,33 @@ impl PartialOrd for UiTarget {
     }
 }
 
-#[allow(non_camel_case_types)]
 #[derive(Clone, Copy, Debug, EnumIter, Eq, PartialEq)]
 pub enum TimeFrame {
-    _5d,
-    _1mo,
-    _3mo,
-    _6mo,
-    _1y,
-    _2y,
-    _5y,
-    _10y,
-    _ytd,
-    _max,
+    FiveDays,
+    OneMonth,
+    ThreeMonths,
+    SixMonths,
+    YearToDate,
+    OneYear,
+    TwoYears,
+    FiveYears,
+    TenYears,
+    Max,
 }
 
 impl TimeFrame {
     pub fn interval(self) -> Interval {
         match self {
-            Self::_5d => Interval::_5d,
-            Self::_1mo => Interval::_1mo,
-            Self::_3mo => Interval::_3mo,
-            Self::_6mo => Interval::_6mo,
-            Self::_1y => Interval::_1y,
-            Self::_2y => Interval::_2y,
-            Self::_5y => Interval::_5y,
-            Self::_10y => Interval::_10y,
-            Self::_ytd => Interval::_ytd,
-            Self::_max => Interval::_max,
+            Self::FiveDays => Interval::_5d,
+            Self::OneMonth => Interval::_1mo,
+            Self::ThreeMonths => Interval::_3mo,
+            Self::SixMonths => Interval::_6mo,
+            Self::YearToDate => Interval::_ytd,
+            Self::OneYear => Interval::_1y,
+            Self::TwoYears => Interval::_2y,
+            Self::FiveYears => Interval::_5y,
+            Self::TenYears => Interval::_10y,
+            Self::Max => Interval::_max,
         }
     }
 }
@@ -191,16 +190,16 @@ impl FromStr for TimeFrame {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "5d" => Ok(Self::_5d),
-            "1mo" => Ok(Self::_1mo),
-            "3mo" => Ok(Self::_3mo),
-            "6mo" => Ok(Self::_6mo),
-            "1y" => Ok(Self::_1y),
-            "2y" => Ok(Self::_2y),
-            "5y" => Ok(Self::_5y),
-            "10y" => Ok(Self::_10y),
-            "ytd" => Ok(Self::_ytd),
-            "max" => Ok(Self::_max),
+            "5d" => Ok(Self::FiveDays),
+            "1mo" => Ok(Self::OneMonth),
+            "3mo" => Ok(Self::ThreeMonths),
+            "6mo" => Ok(Self::SixMonths),
+            "ytd" => Ok(Self::YearToDate),
+            "1y" => Ok(Self::OneYear),
+            "2y" => Ok(Self::TwoYears),
+            "5y" => Ok(Self::FiveYears),
+            "10y" => Ok(Self::TenYears),
+            "max" => Ok(Self::Max),
             "" => Err(ParseTimeFrameError::Empty),
             _ => Err(ParseTimeFrameError::Invalid),
         }
@@ -218,16 +217,16 @@ pub enum ParseTimeFrameError {
 impl fmt::Display for TimeFrame {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::_5d => write!(f, "5d"),
-            Self::_1mo => write!(f, "1mo"),
-            Self::_3mo => write!(f, "3mo"),
-            Self::_6mo => write!(f, "6mo"),
-            Self::_1y => write!(f, "1y"),
-            Self::_2y => write!(f, "2y"),
-            Self::_5y => write!(f, "5y"),
-            Self::_10y => write!(f, "10y"),
-            Self::_ytd => write!(f, "ytd"),
-            Self::_max => write!(f, "max"),
+            Self::FiveDays => write!(f, "5d"),
+            Self::OneMonth => write!(f, "1mo"),
+            Self::ThreeMonths => write!(f, "3mo"),
+            Self::SixMonths => write!(f, "6mo"),
+            Self::YearToDate => write!(f, "ytd"),
+            Self::OneYear => write!(f, "1y"),
+            Self::TwoYears => write!(f, "2y"),
+            Self::FiveYears => write!(f, "5y"),
+            Self::TenYears => write!(f, "10y"),
+            Self::Max => write!(f, "max"),
         }
     }
 }

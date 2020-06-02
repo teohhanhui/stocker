@@ -1,7 +1,9 @@
 use crate::app::{App, TimeFrame, UiState, UiTarget};
 use chrono::{TimeZone, Utc};
+use itertools::Itertools;
+use itertools::MinMaxResult::{MinMax, NoElements, OneElement};
 use math::round;
-use std::cmp::{self, Ordering};
+use std::cmp;
 use strum::IntoEnumIterator;
 use tui::{
     backend::Backend,
@@ -44,7 +46,11 @@ fn draw_header<B: Backend>(
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .horizontal_margin(1)
-        .constraints(vec![Constraint::Length(10), Constraint::Length(20)])
+        .constraints(vec![
+            Constraint::Length(10),
+            Constraint::Length(20),
+            Constraint::Min(1),
+        ])
         .split(area);
     let stock_symbol_area = chunks[0];
     let stock_name_area = chunks[1];
@@ -80,22 +86,88 @@ fn draw_header<B: Backend>(
 }
 
 fn draw_body<B: Backend>(f: &mut Frame<B>, App { stock, .. }: &App, area: Rect) {
-    #[allow(clippy::blacklisted_name)]
-    let historical_prices_data = stock
-        .bars
+    const X_AXIS_LABEL_PADDING: u8 = 4;
+    const X_AXIS_LABEL_WIDTH: u8 = 10;
+    const Y_AXIS_LABEL_HEIGHT: u8 = 1;
+    const Y_AXIS_LABEL_PADDING: u8 = 2;
+
+    let historical_prices_data = stock.bars.iter().map(|bar| {
+        (
+            bar.timestamp_seconds() as f64,
+            round::half_to_even(bar.close, 2),
+        )
+    });
+    let (timestamps, prices): (Vec<_>, Vec<_>) = historical_prices_data.clone().unzip();
+
+    let timestamp_steps: Vec<_> = match timestamps.into_iter().minmax() {
+        MinMax(min, max) => {
+            let min = Utc
+                .timestamp(min as i64, 0)
+                .date()
+                .and_hms(0, 0, 0)
+                .timestamp() as f64;
+            let max = Utc
+                .timestamp(max as i64, 0)
+                .date()
+                .and_hms(23, 59, 59)
+                .timestamp() as f64;
+            let n = round::floor(
+                (area.width - 2) as f64 / (X_AXIS_LABEL_WIDTH + X_AXIS_LABEL_PADDING) as f64,
+                0,
+            ) as usize;
+
+            itertools_num::linspace(min, max, n).collect()
+        }
+        OneElement(t) => vec![
+            Utc.timestamp(t as i64, 0)
+                .date()
+                .and_hms(0, 0, 0)
+                .timestamp() as f64,
+            Utc.timestamp(t as i64, 0)
+                .date()
+                .and_hms(23, 59, 59)
+                .timestamp() as f64,
+        ],
+        NoElements => vec![
+            Utc.ymd(1, 1, 1).and_hms(0, 0, 0).timestamp() as f64,
+            Utc::now().timestamp() as f64,
+        ],
+    };
+    let x_axis_bounds = [
+        *timestamp_steps.first().unwrap(),
+        *timestamp_steps.last().unwrap(),
+    ];
+    let x_axis_labels: Vec<_> = timestamp_steps
         .iter()
-        .map(|bar| {
-            (
-                bar.timestamp_seconds() as f64,
-                round::half_to_even(bar.close, 2),
-            )
-        })
-        .collect::<Vec<_>>();
+        .map(|&t| Utc.timestamp(t as i64, 0).format("%Y-%m-%d").to_string())
+        .collect();
+
+    let price_steps: Vec<_> = match prices.clone().into_iter().minmax() {
+        MinMax(min, max) => {
+            let min = round::floor(min, 2);
+            let max = round::ceil(max, 2);
+            let n = round::floor(
+                (area.height - 2) as f64 / (Y_AXIS_LABEL_HEIGHT + Y_AXIS_LABEL_PADDING) as f64,
+                0,
+            ) as usize;
+
+            itertools_num::linspace(min, max, n).collect()
+        }
+        OneElement(p) => vec![round::floor(p, 2), round::ceil(p, 2)],
+        NoElements => vec![0_f64, f64::INFINITY],
+    };
+    let y_axis_bounds = [
+        round::floor(*price_steps.first().unwrap(), 2),
+        round::ceil(*price_steps.last().unwrap(), 2),
+    ];
+    let y_axis_labels: Vec<_> = price_steps.iter().map(|&p| format!("{:.2}", p)).collect();
+
+    let historical_prices_data: Vec<_> = historical_prices_data.collect();
     let historical_prices_datasets = [Dataset::default()
         .marker(Marker::Braille)
         .style(Style::default().fg({
-            let (_, first_price) = historical_prices_data.first().unwrap_or(&(0f64, 0f64));
-            let (_, last_price) = historical_prices_data.last().unwrap_or(&(0f64, 0f64));
+            let first_price = prices.first().unwrap_or(&0f64);
+            let last_price = prices.last().unwrap_or(&0f64);
             if last_price >= first_price {
                 Color::Green
             } else {
@@ -104,40 +176,6 @@ fn draw_body<B: Backend>(f: &mut Frame<B>, App { stock, .. }: &App, area: Rect) 
         }))
         .graph_type(GraphType::Line)
         .data(&historical_prices_data)];
-
-    let min_timestamp = historical_prices_data
-        .clone()
-        .into_iter()
-        .map(|(date, _)| date)
-        .min_by(|x, y| x.partial_cmp(y).unwrap_or(Ordering::Equal))
-        .unwrap_or(Utc.ymd(1, 1, 1).and_hms(0, 0, 0).timestamp() as f64);
-    let max_timestamp = Utc::now().timestamp() as f64;
-    let x_axis_bounds = [min_timestamp, max_timestamp];
-    let x_axis_labels = [
-        Utc.timestamp(min_timestamp as i64, 0)
-            .format("%Y-%m-%d")
-            .to_string(),
-        Utc.timestamp(max_timestamp as i64, 0)
-            .format("%Y-%m-%d")
-            .to_string(),
-    ];
-
-    let price_limit_low = historical_prices_data
-        .clone()
-        .into_iter()
-        .map(|(_, price)| price)
-        .min_by(|x, y| x.partial_cmp(y).unwrap_or(Ordering::Equal))
-        .unwrap_or(0_f64);
-    let price_limit_low = round::floor(price_limit_low, 0);
-    let price_limit_high = historical_prices_data
-        .clone()
-        .into_iter()
-        .map(|(_, price)| price)
-        .max_by(|x, y| x.partial_cmp(y).unwrap_or(Ordering::Equal))
-        .unwrap_or(f64::INFINITY);
-    let price_limit_high = round::ceil(price_limit_high, 0);
-    let y_axis_bounds = [price_limit_low, price_limit_high];
-    let y_axis_labels = [price_limit_low.to_string(), price_limit_high.to_string()];
 
     let historical_prices_chart = Chart::default()
         .block(

@@ -162,7 +162,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     stock_symbol_input_state.value.pop();
                 }
                 KeyCode::Enter if stock_symbol_input_state.active => {
-                    app.stock.symbol = stock_symbol_input_state.value.to_uppercase();
+                    app.stock.symbol = stock_symbol_input_state.value.to_ascii_uppercase();
 
                     stock_symbol_input_state.active = false;
 
