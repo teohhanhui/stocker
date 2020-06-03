@@ -1,4 +1,5 @@
 use crate::app::TimeFrame;
+use chrono::{DateTime, Utc};
 use std::error::Error;
 use yahoo_finance::{history, Bar, Profile, Quote};
 
@@ -14,8 +15,14 @@ impl Stock {
     pub async fn load_historical_prices(
         &mut self,
         time_frame: TimeFrame,
+        end_date: DateTime<Utc>,
     ) -> Result<(), Box<dyn Error>> {
-        self.bars = history::retrieve_interval(self.symbol.as_str(), time_frame.interval()).await?;
+        self.bars = if let Some(duration) = time_frame.duration() {
+            history::retrieve_range(self.symbol.as_str(), end_date - duration, Some(end_date))
+                .await?
+        } else {
+            history::retrieve_interval(self.symbol.as_str(), time_frame.interval()).await?
+        };
 
         Ok(())
     }

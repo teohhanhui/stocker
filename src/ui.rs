@@ -85,7 +85,13 @@ fn draw_header<B: Backend>(
         .insert(UiTarget::StockName, stock_name_area);
 }
 
-fn draw_body<B: Backend>(f: &mut Frame<B>, App { stock, .. }: &App, area: Rect) {
+fn draw_body<B: Backend>(
+    f: &mut Frame<B>,
+    App {
+        stock, ui_state, ..
+    }: &App,
+    area: Rect,
+) {
     const X_AXIS_LABEL_PADDING: u8 = 4;
     const X_AXIS_LABEL_WIDTH: u8 = 10;
     const Y_AXIS_LABEL_HEIGHT: u8 = 1;
@@ -130,7 +136,7 @@ fn draw_body<B: Backend>(f: &mut Frame<B>, App { stock, .. }: &App, area: Rect) 
         ],
         NoElements => vec![
             Utc.ymd(1, 1, 1).and_hms(0, 0, 0).timestamp() as f64,
-            Utc::now().timestamp() as f64,
+            ui_state.end_date.timestamp() as f64,
         ],
     };
     let x_axis_bounds = [
