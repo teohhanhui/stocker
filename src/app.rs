@@ -17,7 +17,8 @@ pub struct App {
 
 #[derive(Debug)]
 pub struct UiState {
-    pub end_date: DateTime<Utc>,
+    pub end_date: Option<DateTime<Utc>>,
+    pub start_date: Option<DateTime<Utc>>,
     pub stock_symbol_input_state: InputState,
     pub target_areas: RwLock<OrdMap<UiTarget, Rect>>,
     pub time_frame: TimeFrame,

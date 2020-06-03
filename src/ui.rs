@@ -85,13 +85,7 @@ fn draw_header<B: Backend>(
         .insert(UiTarget::StockName, stock_name_area);
 }
 
-fn draw_body<B: Backend>(
-    f: &mut Frame<B>,
-    App {
-        stock, ui_state, ..
-    }: &App,
-    area: Rect,
-) {
+fn draw_body<B: Backend>(f: &mut Frame<B>, App { stock, ui_state }: &App, area: Rect) {
     const X_AXIS_LABEL_PADDING: u8 = 4;
     const X_AXIS_LABEL_WIDTH: u8 = 10;
     const Y_AXIS_LABEL_HEIGHT: u8 = 1;
@@ -105,38 +99,26 @@ fn draw_body<B: Backend>(
     });
     let (timestamps, prices): (Vec<_>, Vec<_>) = historical_prices_data.clone().unzip();
 
-    let timestamp_steps: Vec<_> = match timestamps.into_iter().minmax() {
+    let timestamp_steps: Vec<_> = match timestamps.clone().into_iter().minmax() {
         MinMax(min, max) => {
-            let min = Utc
-                .timestamp(min as i64, 0)
-                .date()
-                .and_hms(0, 0, 0)
-                .timestamp() as f64;
-            let max = Utc
-                .timestamp(max as i64, 0)
-                .date()
-                .and_hms(23, 59, 59)
-                .timestamp() as f64;
-            let n = round::floor(
-                (area.width - 2) as f64 / (X_AXIS_LABEL_WIDTH + X_AXIS_LABEL_PADDING) as f64,
-                0,
-            ) as usize;
+            let n = cmp::min(
+                round::floor(
+                    (area.width - 2) as f64 / (X_AXIS_LABEL_WIDTH + X_AXIS_LABEL_PADDING) as f64,
+                    0,
+                ) as usize,
+                timestamps.len(),
+            );
 
             itertools_num::linspace(min, max, n).collect()
         }
-        OneElement(t) => vec![
-            Utc.timestamp(t as i64, 0)
-                .date()
-                .and_hms(0, 0, 0)
-                .timestamp() as f64,
-            Utc.timestamp(t as i64, 0)
-                .date()
-                .and_hms(23, 59, 59)
-                .timestamp() as f64,
-        ],
+        OneElement(t) => vec![t, t],
         NoElements => vec![
             Utc.ymd(1, 1, 1).and_hms(0, 0, 0).timestamp() as f64,
-            ui_state.end_date.timestamp() as f64,
+            if let Some(end_date) = ui_state.end_date {
+                end_date.timestamp()
+            } else {
+                Utc::now().timestamp()
+            } as f64,
         ],
     };
     let x_axis_bounds = [
@@ -150,8 +132,6 @@ fn draw_body<B: Backend>(
 
     let price_steps: Vec<_> = match prices.clone().into_iter().minmax() {
         MinMax(min, max) => {
-            let min = round::floor(min, 2);
-            let max = round::ceil(max, 2);
             let n = round::floor(
                 (area.height - 2) as f64 / (Y_AXIS_LABEL_HEIGHT + Y_AXIS_LABEL_PADDING) as f64,
                 0,
@@ -159,13 +139,10 @@ fn draw_body<B: Backend>(
 
             itertools_num::linspace(min, max, n).collect()
         }
-        OneElement(p) => vec![round::floor(p, 2), round::ceil(p, 2)],
+        OneElement(p) => vec![p, p],
         NoElements => vec![0_f64, f64::INFINITY],
     };
-    let y_axis_bounds = [
-        round::floor(*price_steps.first().unwrap(), 2),
-        round::ceil(*price_steps.last().unwrap(), 2),
-    ];
+    let y_axis_bounds = [*price_steps.first().unwrap(), *price_steps.last().unwrap()];
     let y_axis_labels: Vec<_> = price_steps.iter().map(|&p| format!("{:.2}", p)).collect();
 
     let historical_prices_data: Vec<_> = historical_prices_data.collect();
