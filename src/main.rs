@@ -232,6 +232,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 }
                 KeyCode::Enter if stock_symbol_input_state.active => {
                     app.stock.symbol = stock_symbol_input_state.value.to_ascii_uppercase();
+                    app.ui_state.start_date = None;
+                    app.ui_state.end_date = None;
 
                     stock_symbol_input_state.active = false;
 
