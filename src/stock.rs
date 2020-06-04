@@ -12,6 +12,14 @@ pub struct Stock {
 }
 
 impl Stock {
+    pub fn name(&self) -> Option<&str> {
+        match &self.profile {
+            Some(Profile::Company(company)) => Some(company.name.as_str()),
+            Some(Profile::Fund(fund)) => Some(fund.name.as_str()),
+            None => None,
+        }
+    }
+
     pub async fn load_historical_prices(
         &mut self,
         time_frame: TimeFrame,

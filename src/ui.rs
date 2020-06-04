@@ -13,7 +13,7 @@ use tui::{
     widgets::{Axis, Block, Borders, Chart, Clear, Dataset, GraphType, List, Paragraph, Text},
     Frame,
 };
-use yahoo_finance::{Profile, Timestamped};
+use yahoo_finance::Timestamped;
 
 pub fn draw<B: Backend>(f: &mut Frame<B>, app: &App) {
     let chunks = Layout::default()
@@ -43,12 +43,14 @@ fn draw_header<B: Backend>(
     }: &App,
     area: Rect,
 ) {
+    let stock_name = stock.name().unwrap_or("");
+
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .horizontal_margin(1)
         .constraints(vec![
             Constraint::Length(10),
-            Constraint::Length(20),
+            Constraint::Length(stock_name.chars().count() as u16),
             Constraint::Min(1),
         ])
         .split(area);
@@ -70,11 +72,7 @@ fn draw_header<B: Backend>(
         .write()
         .insert(UiTarget::StockSymbol, stock_symbol_area);
 
-    let stock_name_texts = vec![Text::raw(match &stock.profile {
-        Some(Profile::Company(company)) => company.name.as_str(),
-        Some(Profile::Fund(fund)) => fund.name.as_str(),
-        None => "",
-    })];
+    let stock_name_texts = vec![Text::raw(stock_name)];
     let stock_name_paragraph = Paragraph::new(stock_name_texts.iter())
         .block(Block::default().style(header_base_style))
         .style(header_base_style);
