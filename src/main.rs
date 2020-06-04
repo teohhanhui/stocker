@@ -379,7 +379,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
                     _ => {}
                 }
                 Some(Err(e)) => {
-                    //
+                    panic!("Error: {:?}", e);
                 }
                 None => {}
             },
