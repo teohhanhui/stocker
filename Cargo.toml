@@ -16,13 +16,17 @@ categories = ["command-line-utilities", "visualization"]
 argh = "0.1.3"
 better-panic = "0.2.0"
 chrono = "0.4.11"
-crossterm = "0.17.5"
+crossterm = { version = "0.17.5", features = ["event-stream"] }
 err-derive = "0.2.4"
+futures = "0.3.5"
+futures-timer = "3.0.2"
 im = "15.0.0"
 itertools = "0.9.0"
 itertools-num = "0.1.3"
 libmath = "0.2.1"
 parking_lot = "0.10.2"
+smol = { version = "0.1.11", features = ["tokio02"] }
+smol-potat = "0.3.3"
 strum = "0.18.0"
 strum_macros = "0.18.0"
 tokio = "0.2.21"
