@@ -1,12 +1,13 @@
 use crate::stock::Stock;
+use anyhow::Context;
 use chrono::{DateTime, Duration, Utc};
-use err_derive::Error;
 use im::ordmap::OrdMap;
 use parking_lot::{RwLock, RwLockWriteGuard};
 use std::cmp::Ordering;
 use std::fmt;
 use std::str::FromStr;
 use strum_macros::EnumIter;
+use thiserror::Error;
 use tui::{layout::Rect, widgets::ListState};
 use yahoo_finance::Interval;
 
@@ -56,39 +57,45 @@ where
         Some(self.items[selected].clone())
     }
 
-    pub fn select(&self, item: T) {
+    pub fn select(&self, item: T) -> anyhow::Result<()> {
         let n = self
             .items
             .iter()
             .cloned()
             .position(|t| t == item)
-            .expect("item not found");
+            .with_context(|| "item not found")?;
 
         self.select_nth(n);
+
+        Ok(())
     }
 
-    pub fn select_prev(&self) {
+    pub fn select_prev(&self) -> anyhow::Result<()> {
         let selected = self
             .list_state
             .read()
             .selected()
-            .expect("cannot select previous item when nothing is selected");
+            .with_context(|| "cannot select previous item when nothing is selected")?;
 
         if selected > 0 {
             self.select_nth(selected - 1);
         }
+
+        Ok(())
     }
 
-    pub fn select_next(&self) {
+    pub fn select_next(&self) -> anyhow::Result<()> {
         let selected = self
             .list_state
             .read()
             .selected()
-            .expect("cannot select next item when nothing is selected");
+            .with_context(|| "cannot select next item when nothing is selected")?;
 
         if selected < self.items.len() - 1 {
             self.select_nth(selected + 1);
         }
+
+        Ok(())
     }
 
     pub fn select_nth(&self, n: usize) {
@@ -225,9 +232,9 @@ impl FromStr for TimeFrame {
 
 #[derive(Debug, Error)]
 pub enum ParseTimeFrameError {
-    #[error(display = "cannot parse time frame from empty string")]
+    #[error("cannot parse time frame from empty string")]
     Empty,
-    #[error(display = "invalid time frame literal")]
+    #[error("invalid time frame literal")]
     Invalid,
 }
 

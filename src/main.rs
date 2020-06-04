@@ -15,7 +15,6 @@ use futures::{future::FutureExt, select, StreamExt};
 use futures_timer::Delay;
 use im::ordmap;
 use parking_lot::RwLock;
-use std::error::Error;
 use std::io::{self, Write};
 use std::panic;
 use std::str::FromStr;
@@ -113,7 +112,7 @@ fn setup_panic_hook() {
 }
 
 #[smol_potat::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> anyhow::Result<()> {
     better_panic::install();
 
     let args: Args = argh::from_env();
@@ -133,7 +132,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             time_frame: args.time_frame,
             time_frame_menu_state: {
                 let menu_state = MenuState::new(TimeFrame::iter());
-                menu_state.select(args.time_frame);
+                menu_state.select(args.time_frame)?;
                 menu_state
             },
         },
@@ -163,7 +162,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         target_areas.write().clear();
 
-        terminal.draw(|mut f| ui::draw(&mut f, &app))?;
+        terminal.draw(|mut f| {
+            ui::draw(&mut f, &app).expect("Draw failed");
+        })?;
 
         execute!(
             terminal.backend_mut(),
@@ -302,10 +303,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
                             }
                         }
                         KeyCode::Up if time_frame_menu_state.active => {
-                            time_frame_menu_state.select_prev();
+                            time_frame_menu_state.select_prev()?;
                         }
                         KeyCode::Down if time_frame_menu_state.active => {
-                            time_frame_menu_state.select_next();
+                            time_frame_menu_state.select_next()?;
                         }
                         KeyCode::Char(c) if stock_symbol_input_state.active => {
                             stock_symbol_input_state.value.push(c.to_ascii_uppercase());
@@ -392,7 +393,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
         if !time_frame_menu_state.active {
             time_frame_menu_state.clear_selection();
-            time_frame_menu_state.select(app.ui_state.time_frame);
+            time_frame_menu_state.select(app.ui_state.time_frame)?;
         }
     }
 

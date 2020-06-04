@@ -1,6 +1,5 @@
 use crate::app::TimeFrame;
 use chrono::{DateTime, Utc};
-use std::error::Error;
 use yahoo_finance::{history, Bar, Profile, Quote};
 
 #[derive(Debug)]
@@ -25,7 +24,7 @@ impl Stock {
         time_frame: TimeFrame,
         start_date: Option<DateTime<Utc>>,
         end_date: Option<DateTime<Utc>>,
-    ) -> Result<(), Box<dyn Error>> {
+    ) -> anyhow::Result<()> {
         self.bars = if let (Some(_), Some(start_date)) = (time_frame.duration(), start_date) {
             history::retrieve_range(self.symbol.as_str(), start_date, end_date).await?
         } else {
@@ -35,7 +34,7 @@ impl Stock {
         Ok(())
     }
 
-    pub async fn load_profile(&mut self) -> Result<(), Box<dyn Error>> {
+    pub async fn load_profile(&mut self) -> anyhow::Result<()> {
         self.profile = Some(Profile::load(self.symbol.as_str()).await?);
 
         Ok(())

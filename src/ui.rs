@@ -15,7 +15,7 @@ use tui::{
 };
 use yahoo_finance::Timestamped;
 
-pub fn draw<B: Backend>(f: &mut Frame<B>, app: &App) {
+pub fn draw<B: Backend>(f: &mut Frame<B>, app: &App) -> anyhow::Result<()> {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints(vec![
@@ -28,10 +28,12 @@ pub fn draw<B: Backend>(f: &mut Frame<B>, app: &App) {
     let body_area = chunks[1];
     let footer_area = chunks[2];
 
-    draw_header(f, app, header_area);
-    draw_body(f, app, body_area);
-    draw_footer(f, app, footer_area);
-    draw_overlay(f, app);
+    draw_header(f, app, header_area)?;
+    draw_body(f, app, body_area)?;
+    draw_footer(f, app, footer_area)?;
+    draw_overlay(f, app)?;
+
+    Ok(())
 }
 
 fn draw_header<B: Backend>(
@@ -42,7 +44,7 @@ fn draw_header<B: Backend>(
         ..
     }: &App,
     area: Rect,
-) {
+) -> anyhow::Result<()> {
     let stock_name = stock.name().unwrap_or("");
 
     let chunks = Layout::default()
@@ -81,9 +83,15 @@ fn draw_header<B: Backend>(
     target_areas
         .write()
         .insert(UiTarget::StockName, stock_name_area);
+
+    Ok(())
 }
 
-fn draw_body<B: Backend>(f: &mut Frame<B>, App { stock, ui_state }: &App, area: Rect) {
+fn draw_body<B: Backend>(
+    f: &mut Frame<B>,
+    App { stock, ui_state }: &App,
+    area: Rect,
+) -> anyhow::Result<()> {
     const X_AXIS_LABEL_PADDING: u8 = 4;
     const X_AXIS_LABEL_WIDTH: u8 = 10;
     const Y_AXIS_LABEL_HEIGHT: u8 = 1;
@@ -169,6 +177,8 @@ fn draw_body<B: Backend>(f: &mut Frame<B>, App { stock, ui_state }: &App, area: 
         .y_axis(Axis::default().bounds(y_axis_bounds).labels(&y_axis_labels))
         .datasets(&historical_prices_datasets);
     f.render_widget(historical_prices_chart, area);
+
+    Ok(())
 }
 
 fn draw_footer<B: Backend>(
@@ -184,7 +194,7 @@ fn draw_footer<B: Backend>(
         ..
     }: &App,
     area: Rect,
-) {
+) -> anyhow::Result<()> {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .horizontal_margin(if time_frame_menu_state.active { 0 } else { 1 })
@@ -236,6 +246,8 @@ fn draw_footer<B: Backend>(
     target_areas
         .write()
         .insert(UiTarget::TimeFrame, time_frame_area);
+
+    Ok(())
 }
 
 fn draw_overlay<B: Backend>(
@@ -250,7 +262,7 @@ fn draw_overlay<B: Backend>(
             },
         ..
     }: &App,
-) {
+) -> anyhow::Result<()> {
     let active_base_style = Style::default().fg(Color::White).bg(Color::DarkGray);
     let highlight_base_style = Style::default().fg(Color::Black).bg(Color::White);
 
@@ -323,4 +335,6 @@ fn draw_overlay<B: Backend>(
             .write()
             .insert(UiTarget::TimeFrameMenu, time_frame_menu_area);
     }
+
+    Ok(())
 }
