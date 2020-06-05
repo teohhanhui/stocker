@@ -53,7 +53,7 @@ fn draw_header<B: Backend>(
         .constraints(vec![
             Constraint::Length(10),
             Constraint::Length(stock_name.chars().count() as u16),
-            Constraint::Min(1),
+            Constraint::Min(0),
         ])
         .split(area);
     let stock_symbol_area = chunks[0];
@@ -198,7 +198,7 @@ fn draw_footer<B: Backend>(
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
         .horizontal_margin(if time_frame_menu_state.active { 0 } else { 1 })
-        .constraints(vec![Constraint::Min(5), Constraint::Length(20)])
+        .constraints(vec![Constraint::Min(0), Constraint::Length(20)])
         .split(area);
     let time_frame_area = chunks[1];
 
@@ -269,7 +269,7 @@ fn draw_overlay<B: Backend>(
     if stock_symbol_input_state.active {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints(vec![Constraint::Length(30), Constraint::Min(5)])
+            .constraints(vec![Constraint::Length(30), Constraint::Min(0)])
             .split(f.size());
         let stock_symbol_input_area = chunks[0];
         let chunks = Layout::default()
@@ -277,7 +277,7 @@ fn draw_overlay<B: Backend>(
             .constraints(vec![
                 Constraint::Length(1),
                 Constraint::Length(3),
-                Constraint::Min(5),
+                Constraint::Min(0),
             ])
             .split(stock_symbol_input_area);
         let stock_symbol_input_area = chunks[1];
@@ -302,14 +302,17 @@ fn draw_overlay<B: Backend>(
     if time_frame_menu_state.active {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints(vec![Constraint::Min(5), Constraint::Length(20)])
+            .constraints(vec![Constraint::Min(0), Constraint::Length(20)])
             .split(f.size());
         let time_frame_menu_area = chunks[1];
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints(vec![
-                Constraint::Min(5),
-                Constraint::Length(cmp::min(TimeFrame::iter().count() as u16 + 2, 12)),
+                Constraint::Min(0),
+                Constraint::Length(cmp::min(
+                    TimeFrame::iter().count() as u16 + 2,
+                    time_frame_menu_area.height - 2,
+                )),
                 Constraint::Length(2),
             ])
             .split(time_frame_menu_area);

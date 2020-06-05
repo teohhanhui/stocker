@@ -17,7 +17,7 @@ use std::panic;
 use std::str::FromStr;
 use std::time;
 use strum::IntoEnumIterator;
-use tui::{backend::CrosstermBackend, layout::Rect, Terminal};
+use tui::{backend::CrosstermBackend, Terminal};
 use yahoo_finance::Timestamped;
 
 mod app;
@@ -185,14 +185,13 @@ async fn main() -> anyhow::Result<()> {
         )?;
 
         if app.ui_state.stock_symbol_input_state.active {
-            let Rect { x, y, .. } = *app
+            let (cx, cy) = app
                 .ui_state
-                .target_areas
-                .read()
-                .get(&UiTarget::StockSymbolInput)
+                .input_cursor(
+                    &app.ui_state.stock_symbol_input_state,
+                    UiTarget::StockSymbolInput,
+                )
                 .unwrap();
-            let cx = x + 1 + app.ui_state.stock_symbol_input_state.value.chars().count() as u16;
-            let cy = y + 1;
 
             execute!(
                 terminal.backend_mut(),
@@ -277,6 +276,7 @@ async fn main() -> anyhow::Result<()> {
                         .value
                         .push(c.to_ascii_uppercase());
                 }
+                KeyCode::Char(_) if app.ui_state.time_frame_menu_state.active => {}
                 KeyCode::Char('q') => {
                     break;
                 }
@@ -310,14 +310,18 @@ async fn main() -> anyhow::Result<()> {
                     }
                     Some((UiTarget::StockSymbolInput, _)) => {}
                     Some((UiTarget::TimeFrameMenu, area)) => {
-                        if area.height as usize - 2 < app.ui_state.time_frame_menu_state.items.len()
-                        {
-                            todo!("not sure how to select an item from scrollable list");
-                        }
-                        let n: usize = (row - area.top() - 1) as usize;
-
-                        if n < app.ui_state.time_frame_menu_state.items.len() {
+                        if let Some(n) = app.ui_state.menu_index(
+                            &app.ui_state.time_frame_menu_state,
+                            area,
+                            col,
+                            row,
+                        ) {
                             app.ui_state.time_frame_menu_state.select_nth(n)?;
+
+                            // Trigger draw to highlight the selected item
+                            terminal.draw(|mut f| {
+                                ui::draw(&mut f, &app).expect("Draw failed");
+                            })?;
 
                             app.ui_state.set_time_frame(
                                 app.ui_state.time_frame_menu_state.selected().unwrap(),

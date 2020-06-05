@@ -8,7 +8,10 @@ use std::fmt;
 use std::str::FromStr;
 use strum_macros::EnumIter;
 use thiserror::Error;
-use tui::{layout::Rect, widgets::ListState};
+use tui::{
+    layout::{Margin, Rect},
+    widgets::ListState,
+};
 use yahoo_finance::Interval;
 
 pub struct App {
@@ -94,6 +97,59 @@ impl UiState {
         Ok(())
     }
 
+    pub fn input_cursor(
+        &self,
+        input_state: &InputState,
+        input_target: UiTarget,
+    ) -> Option<(u16, u16)> {
+        let target_areas = self.target_areas.read();
+        let input_area = target_areas.get(&input_target)?;
+        let border_margin = Margin {
+            horizontal: 1,
+            vertical: 1,
+        };
+        let inner_area = input_area.inner(&border_margin);
+
+        let cx = inner_area.left() + input_state.value.chars().count() as u16;
+        let cy = inner_area.top();
+
+        Some((cx, cy))
+    }
+
+    pub fn menu_index<T>(
+        &self,
+        menu_state: &MenuState<T>,
+        menu_area: Rect,
+        x: u16,
+        y: u16,
+    ) -> Option<usize>
+    where
+        T: Clone + PartialEq + ToString,
+    {
+        let border_margin = Margin {
+            horizontal: 1,
+            vertical: 1,
+        };
+        let inner_area = menu_area.inner(&border_margin);
+
+        if inner_area.left() <= x
+            && inner_area.right() >= x
+            && inner_area.top() <= y
+            && inner_area.bottom() >= y
+        {
+            if (inner_area.height as usize) < menu_state.items.len() {
+                todo!("not sure how to select an item from scrollable list");
+            }
+            let n: usize = (y - inner_area.top()) as usize;
+
+            if n < menu_state.items.len() {
+                return Some(n);
+            }
+        }
+
+        None
+    }
+
     pub fn target_area(&self, x: u16, y: u16) -> Option<(UiTarget, Rect)> {
         self.target_areas
             .read()
@@ -117,7 +173,7 @@ impl UiState {
 #[derive(Debug)]
 pub struct MenuState<T>
 where
-    T: Clone + ToString,
+    T: Clone + PartialEq + ToString,
 {
     pub active: bool,
     pub items: Vec<T>,
