@@ -16,6 +16,28 @@ pub struct App {
     pub ui_state: UiState,
 }
 
+impl App {
+    pub async fn load_stock<S>(&mut self, symbol: S) -> anyhow::Result<()>
+    where
+        S: AsRef<str>,
+    {
+        self.stock.symbol = symbol.as_ref().to_ascii_uppercase();
+
+        self.ui_state.clear_date_range()?;
+
+        self.stock.load_profile().await?;
+        self.stock
+            .load_historical_prices(
+                self.ui_state.time_frame,
+                self.ui_state.start_date,
+                self.ui_state.end_date,
+            )
+            .await?;
+
+        Ok(())
+    }
+}
+
 #[derive(Debug)]
 pub struct UiState {
     pub end_date: Option<DateTime<Utc>>,
@@ -24,6 +46,72 @@ pub struct UiState {
     pub target_areas: RwLock<OrdMap<UiTarget, Rect>>,
     pub time_frame: TimeFrame,
     pub time_frame_menu_state: MenuState<TimeFrame>,
+}
+
+impl UiState {
+    pub fn shift_date_range_before(&mut self, dt: DateTime<Utc>) -> anyhow::Result<()> {
+        let time_frame_duration = self
+            .time_frame
+            .duration()
+            .expect("time frame has no duration");
+
+        let end_date = (dt - Duration::days(1)).date().and_hms(23, 59, 59);
+        let start_date = (end_date - time_frame_duration + Duration::days(1))
+            .date()
+            .and_hms(0, 0, 0);
+
+        self.start_date = Some(start_date);
+        self.end_date = Some(end_date);
+
+        Ok(())
+    }
+
+    pub fn shift_date_range_after(&mut self, dt: DateTime<Utc>) -> anyhow::Result<()> {
+        let time_frame_duration = self
+            .time_frame
+            .duration()
+            .expect("time frame has no duration");
+
+        let start_date = (dt + Duration::days(1)).date().and_hms(0, 0, 0);
+        let end_date = (start_date + time_frame_duration - Duration::days(1))
+            .date()
+            .and_hms(23, 59, 59);
+
+        self.start_date = Some(start_date);
+        self.end_date = Some(end_date);
+
+        if end_date > Utc::now() {
+            self.clear_date_range()?;
+        }
+
+        Ok(())
+    }
+
+    pub fn clear_date_range(&mut self) -> anyhow::Result<()> {
+        self.start_date = None;
+        self.end_date = None;
+
+        Ok(())
+    }
+
+    pub fn target_area(&self, x: u16, y: u16) -> Option<(UiTarget, Rect)> {
+        self.target_areas
+            .read()
+            .clone()
+            .into_iter()
+            .rev()
+            .find(|(_, area)| {
+                area.left() <= x && area.right() >= x && area.top() <= y && area.bottom() >= y
+            })
+    }
+
+    pub fn set_time_frame(&mut self, time_frame: TimeFrame) -> anyhow::Result<()> {
+        self.time_frame = time_frame;
+
+        self.clear_date_range()?;
+
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -65,7 +153,7 @@ where
             .position(|t| t == item)
             .with_context(|| "item not found")?;
 
-        self.select_nth(n);
+        self.select_nth(n)?;
 
         Ok(())
     }
@@ -78,7 +166,7 @@ where
             .with_context(|| "cannot select previous item when nothing is selected")?;
 
         if selected > 0 {
-            self.select_nth(selected - 1);
+            self.select_nth(selected - 1)?;
         }
 
         Ok(())
@@ -92,18 +180,22 @@ where
             .with_context(|| "cannot select next item when nothing is selected")?;
 
         if selected < self.items.len() - 1 {
-            self.select_nth(selected + 1);
+            self.select_nth(selected + 1)?;
         }
 
         Ok(())
     }
 
-    pub fn select_nth(&self, n: usize) {
+    pub fn select_nth(&self, n: usize) -> anyhow::Result<()> {
         self.list_state.write().select(Some(n));
+
+        Ok(())
     }
 
-    pub fn clear_selection(&self) {
+    pub fn clear_selection(&self) -> anyhow::Result<()> {
         self.list_state.write().select(None);
+
+        Ok(())
     }
 
     pub fn list_state_write(&self) -> RwLockWriteGuard<ListState> {

@@ -15,11 +15,10 @@ categories = ["command-line-utilities", "visualization"]
 [dependencies]
 anyhow = "1.0.31"
 argh = "0.1.3"
+async-std = { version = "1.6.0", features = [ "unstable" ] }
 better-panic = "0.2.0"
 chrono = "0.4.11"
 crossterm = { version = "0.17.5", features = ["event-stream"] }
-futures = "0.3.5"
-futures-timer = "3.0.2"
 im = "15.0.0"
 itertools = "0.9.0"
 itertools-num = "0.1.3"
@@ -30,7 +29,6 @@ smol-potat = "0.3.3"
 strum = "0.18.0"
 strum_macros = "0.18.0"
 thiserror = "1.0.19"
-tokio = "0.2.21"
 tui = { version = "0.9.5", default-features = false, features = ['crossterm'] }
 yahoo-finance = "0.3.0"
 
