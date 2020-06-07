@@ -1,5 +1,5 @@
 use crate::{
-    app::{App, InputState, MenuState, TimeFrame, UiState, UiTarget},
+    app::{App, TimeFrame, UiState, UiTarget},
     stock::Stock,
 };
 use argh::FromArgs;
@@ -10,13 +10,10 @@ use crossterm::{
     event::{self, Event, EventStream, KeyCode, KeyEvent, MouseButton, MouseEvent},
     execute, terminal,
 };
-use im::ordmap;
-use parking_lot::RwLock;
 use std::io::{self, Write};
 use std::panic;
 use std::str::FromStr;
 use std::time;
-use strum::IntoEnumIterator;
 use tui::{backend::CrosstermBackend, Terminal};
 use yahoo_finance::Timestamped;
 
@@ -31,6 +28,9 @@ const TICK_RATE: u64 = 100;
 /// Stocks dashboard
 #[derive(Debug, FromArgs)]
 struct Args {
+    /// debug draw
+    #[argh(switch)]
+    debug_draw: bool,
     /// stock symbol
     #[argh(option, short = 's', default = "DEFAULT_SYMBOL.to_owned()")]
     symbol: String,
@@ -128,17 +128,11 @@ async fn main() -> anyhow::Result<()> {
     setup_terminal();
 
     let mut app = App {
-        ui_state: UiState {
-            end_date: None,
-            start_date: None,
-            stock_symbol_input_state: InputState::default(),
-            target_areas: RwLock::new(ordmap! {}),
-            time_frame: args.time_frame,
-            time_frame_menu_state: {
-                let menu_state = MenuState::new(TimeFrame::iter());
-                menu_state.select(args.time_frame)?;
-                menu_state
-            },
+        ui_state: {
+            let mut ui_state = UiState::default();
+            ui_state.set_time_frame(args.time_frame)?;
+            ui_state.set_debug_draw(args.debug_draw)?;
+            ui_state
         },
         stock: Stock {
             bars: vec![],
@@ -148,14 +142,12 @@ async fn main() -> anyhow::Result<()> {
         },
     };
 
-    app.stock.load_profile().await?;
-    app.stock
-        .load_historical_prices(
-            app.ui_state.time_frame,
-            app.ui_state.start_date,
-            app.ui_state.end_date,
-        )
-        .await?;
+    // Draw early to show an unpopulated UI before data is loaded
+    terminal.draw(|mut f| {
+        ui::draw(&mut f, &app).expect("Draw failed");
+    })?;
+
+    app.load_stock(&app.stock.symbol.clone()).await?;
 
     let input_event_stream = EventStream::new()
         .filter(|e| match e {
@@ -167,12 +159,12 @@ async fn main() -> anyhow::Result<()> {
             Ok(Event::Mouse(mouse_event)) => InputEvent::Mouse(mouse_event),
             _ => unreachable!(),
         });
-    let input_tick_stream =
-        stream::interval(time::Duration::from_millis(TICK_RATE)).map(|()| InputEvent::Tick);
+    let tick_stream = stream::interval(time::Duration::from_millis(TICK_RATE));
+    let input_tick_stream = tick_stream.map(|()| InputEvent::Tick);
     let mut input_event_stream = input_event_stream.merge(input_tick_stream);
 
     loop {
-        app.ui_state.target_areas.write().clear();
+        app.ui_state.clear_target_areas()?;
 
         terminal.draw(|mut f| {
             ui::draw(&mut f, &app).expect("Draw failed");
@@ -181,6 +173,7 @@ async fn main() -> anyhow::Result<()> {
         execute!(
             terminal.backend_mut(),
             cursor::Hide,
+            cursor::MoveTo(0, 0),
             cursor::DisableBlinking
         )?;
 
@@ -211,7 +204,7 @@ async fn main() -> anyhow::Result<()> {
 
                     execute!(terminal.backend_mut(), cursor::DisableBlinking)?;
 
-                    app.load_stock(app.ui_state.stock_symbol_input_state.value.clone())
+                    app.load_stock(&app.ui_state.stock_symbol_input_state.value.clone())
                         .await?;
                 }
                 KeyCode::Enter if app.ui_state.time_frame_menu_state.active => {

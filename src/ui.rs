@@ -1,5 +1,5 @@
 use crate::app::{App, TimeFrame, UiState, UiTarget};
-use chrono::{TimeZone, Utc};
+use chrono::{Duration, TimeZone, Utc};
 use itertools::Itertools;
 use itertools::MinMaxResult::{MinMax, NoElements, OneElement};
 use math::round;
@@ -32,6 +32,9 @@ pub fn draw<B: Backend>(f: &mut Frame<B>, app: &App) -> anyhow::Result<()> {
     draw_body(f, app, body_area)?;
     draw_footer(f, app, footer_area)?;
     draw_overlay(f, app)?;
+    if app.ui_state.debug_draw() {
+        draw_debug(f, app)?;
+    }
 
     Ok(())
 }
@@ -39,9 +42,7 @@ pub fn draw<B: Backend>(f: &mut Frame<B>, app: &App) -> anyhow::Result<()> {
 fn draw_header<B: Backend>(
     f: &mut Frame<B>,
     App {
-        stock,
-        ui_state: UiState { target_areas, .. },
-        ..
+        stock, ui_state, ..
     }: &App,
     area: Rect,
 ) -> anyhow::Result<()> {
@@ -70,9 +71,7 @@ fn draw_header<B: Backend>(
         .style(header_base_style.clone().modifier(Modifier::BOLD));
     f.render_widget(stock_symbol_paragraph, stock_symbol_area);
 
-    target_areas
-        .write()
-        .insert(UiTarget::StockSymbol, stock_symbol_area);
+    ui_state.set_target_area(UiTarget::StockSymbol, stock_symbol_area)?;
 
     let stock_name_texts = vec![Text::raw(stock_name)];
     let stock_name_paragraph = Paragraph::new(stock_name_texts.iter())
@@ -80,9 +79,7 @@ fn draw_header<B: Backend>(
         .style(header_base_style);
     f.render_widget(stock_name_paragraph, stock_name_area);
 
-    target_areas
-        .write()
-        .insert(UiTarget::StockName, stock_name_area);
+    ui_state.set_target_area(UiTarget::StockName, stock_name_area)?;
 
     Ok(())
 }
@@ -183,21 +180,16 @@ fn draw_body<B: Backend>(
 
 fn draw_footer<B: Backend>(
     f: &mut Frame<B>,
-    App {
-        ui_state:
-            UiState {
-                target_areas,
-                time_frame,
-                time_frame_menu_state,
-                ..
-            },
-        ..
-    }: &App,
+    App { ui_state, .. }: &App,
     area: Rect,
 ) -> anyhow::Result<()> {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .horizontal_margin(if time_frame_menu_state.active { 0 } else { 1 })
+        .horizontal_margin(if ui_state.time_frame_menu_state.active {
+            0
+        } else {
+            1
+        })
         .constraints(vec![Constraint::Min(0), Constraint::Length(20)])
         .split(area);
     let time_frame_area = chunks[1];
@@ -207,15 +199,15 @@ fn draw_footer<B: Backend>(
     let time_frame_texts = vec![
         Text::styled(
             "Time frame: ",
-            if time_frame_menu_state.active {
+            if ui_state.time_frame_menu_state.active {
                 menu_active_base_style
             } else {
                 Style::default()
             },
         ),
         Text::styled(
-            time_frame.to_string(),
-            if time_frame_menu_state.active {
+            ui_state.time_frame.to_string(),
+            if ui_state.time_frame_menu_state.active {
                 menu_active_base_style
             } else {
                 Style::default()
@@ -223,9 +215,9 @@ fn draw_footer<B: Backend>(
         ),
     ];
     let time_frame_paragraph = Paragraph::new(time_frame_texts.iter())
-        .block(if time_frame_menu_state.active {
+        .block(if ui_state.time_frame_menu_state.active {
             Block::default()
-                .style(if time_frame_menu_state.active {
+                .style(if ui_state.time_frame_menu_state.active {
                     menu_active_base_style
                 } else {
                     Style::default()
@@ -235,7 +227,7 @@ fn draw_footer<B: Backend>(
         } else {
             Block::default()
         })
-        .style(if time_frame_menu_state.active {
+        .style(if ui_state.time_frame_menu_state.active {
             menu_active_base_style
         } else {
             Style::default()
@@ -243,30 +235,16 @@ fn draw_footer<B: Backend>(
         .alignment(Alignment::Right);
     f.render_widget(time_frame_paragraph, time_frame_area);
 
-    target_areas
-        .write()
-        .insert(UiTarget::TimeFrame, time_frame_area);
+    ui_state.set_target_area(UiTarget::TimeFrame, time_frame_area)?;
 
     Ok(())
 }
 
-fn draw_overlay<B: Backend>(
-    f: &mut Frame<B>,
-    App {
-        ui_state:
-            UiState {
-                stock_symbol_input_state,
-                target_areas,
-                time_frame_menu_state,
-                ..
-            },
-        ..
-    }: &App,
-) -> anyhow::Result<()> {
+fn draw_overlay<B: Backend>(f: &mut Frame<B>, App { ui_state, .. }: &App) -> anyhow::Result<()> {
     let active_base_style = Style::default().fg(Color::White).bg(Color::DarkGray);
     let highlight_base_style = Style::default().fg(Color::Black).bg(Color::White);
 
-    if stock_symbol_input_state.active {
+    if ui_state.stock_symbol_input_state.active {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints(vec![Constraint::Length(30), Constraint::Min(0)])
@@ -282,7 +260,8 @@ fn draw_overlay<B: Backend>(
             .split(stock_symbol_input_area);
         let stock_symbol_input_area = chunks[1];
 
-        let stock_symbol_input_texts = vec![Text::raw(stock_symbol_input_state.value.as_str())];
+        let stock_symbol_input_texts =
+            vec![Text::raw(ui_state.stock_symbol_input_state.value.as_str())];
         let stock_symbol_input_paragraph = Paragraph::new(stock_symbol_input_texts.iter())
             .block(
                 Block::default()
@@ -294,12 +273,10 @@ fn draw_overlay<B: Backend>(
         f.render_widget(Clear, stock_symbol_input_area);
         f.render_widget(stock_symbol_input_paragraph, stock_symbol_input_area);
 
-        target_areas
-            .write()
-            .insert(UiTarget::StockSymbolInput, stock_symbol_input_area);
+        ui_state.set_target_area(UiTarget::StockSymbolInput, stock_symbol_input_area)?;
     }
 
-    if time_frame_menu_state.active {
+    if ui_state.time_frame_menu_state.active {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints(vec![Constraint::Min(0), Constraint::Length(20)])
@@ -331,13 +308,67 @@ fn draw_overlay<B: Backend>(
         f.render_stateful_widget(
             time_frame_menu_list,
             time_frame_menu_area,
-            &mut *time_frame_menu_state.list_state_write(),
+            &mut *ui_state.time_frame_menu_state.list_state_write(),
         );
 
-        target_areas
-            .write()
-            .insert(UiTarget::TimeFrameMenu, time_frame_menu_area);
+        ui_state.set_target_area(UiTarget::TimeFrameMenu, time_frame_menu_area)?;
     }
+
+    Ok(())
+}
+
+fn draw_debug<B: Backend>(
+    f: &mut Frame<B>,
+    App {
+        ui_state: UiState {
+            frame_rate_counter, ..
+        },
+        ..
+    }: &App,
+) -> anyhow::Result<()> {
+    let frame_time = if let Some(frame_time) = frame_rate_counter.incr() {
+        Some(frame_time)
+    } else {
+        frame_rate_counter.frame_time()
+    };
+    let frame_time_text = if let Some(frame_time) = frame_time {
+        format!("{} ms", frame_time.num_milliseconds())
+    } else {
+        "...".to_owned()
+    };
+
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(vec![Constraint::Length(20), Constraint::Min(0)])
+        .split(f.size());
+    let timestamp_area = chunks[0];
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(vec![Constraint::Min(0), Constraint::Length(1)])
+        .split(timestamp_area);
+    let timestamp_area = chunks[1];
+
+    let timestamp_texts = vec![
+        Text::styled("Frame time: ", Style::default()),
+        Text::styled(
+            frame_time_text,
+            if let Some(frame_time) = frame_time {
+                if frame_time
+                    >= Duration::milliseconds(round::ceil(crate::TICK_RATE as f64 * 1.1, 0) as i64)
+                {
+                    Style::default().fg(Color::Red)
+                } else {
+                    Style::default().fg(Color::Green)
+                }
+            } else {
+                Style::default()
+            },
+        ),
+    ];
+    let timestamp_paragraph = Paragraph::new(timestamp_texts.iter());
+
+    f.render_widget(Clear, timestamp_area);
+    f.render_widget(timestamp_paragraph, timestamp_area);
 
     Ok(())
 }
