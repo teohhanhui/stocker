@@ -46,6 +46,8 @@ pub struct UiState {
     debug_draw: bool,
     pub end_date: Option<DateTime<Utc>>,
     pub frame_rate_counter: FrameRateCounter,
+    pub indicator: Option<Indicator>,
+    pub indicator_menu_state: MenuState<Indicator>,
     pub start_date: Option<DateTime<Utc>>,
     pub stock_symbol_input_state: InputState,
     target_areas: RwLock<OrdMap<UiTarget, Rect>>,
@@ -185,6 +187,20 @@ impl UiState {
         Ok(())
     }
 
+    pub fn set_indicator(&mut self, indicator: Indicator) -> anyhow::Result<()> {
+        self.indicator = Some(indicator);
+        self.indicator_menu_state.select(indicator)?;
+
+        Ok(())
+    }
+
+    pub fn clear_indicator(&mut self) -> anyhow::Result<()> {
+        self.indicator = None;
+        self.indicator_menu_state.clear_selection()?;
+
+        Ok(())
+    }
+
     pub fn set_time_frame(&mut self, time_frame: TimeFrame) -> anyhow::Result<()> {
         self.time_frame = time_frame;
         self.time_frame_menu_state.select(time_frame)?;
@@ -202,6 +218,8 @@ impl Default for UiState {
         Self {
             debug_draw: false,
             end_date: None,
+            indicator: None,
+            indicator_menu_state: MenuState::new(Indicator::iter()),
             frame_rate_counter: FrameRateCounter::new(Duration::milliseconds(1_000)),
             start_date: None,
             stock_symbol_input_state: InputState::default(),
@@ -261,13 +279,11 @@ where
     }
 
     pub fn select_prev(&self) -> anyhow::Result<()> {
-        let selected = self
-            .list_state
-            .read()
-            .selected()
-            .with_context(|| "cannot select previous item when nothing is selected")?;
+        let selected = self.list_state.read().selected().unwrap_or_else(|| 0_usize);
 
-        if selected > 0 {
+        if selected == 0 {
+            self.clear_selection()?;
+        } else if selected > 0 {
             self.select_nth(selected - 1)?;
         }
 
@@ -275,14 +291,14 @@ where
     }
 
     pub fn select_next(&self) -> anyhow::Result<()> {
-        let selected = self
-            .list_state
-            .read()
-            .selected()
-            .with_context(|| "cannot select next item when nothing is selected")?;
+        let selected = self.list_state.read().selected();
 
-        if selected < self.items.len() - 1 {
-            self.select_nth(selected + 1)?;
+        if let Some(selected) = selected {
+            if selected < self.items.len() - 1 {
+                self.select_nth(selected + 1)?;
+            }
+        } else {
+            self.select_nth(0)?;
         }
 
         Ok(())
@@ -327,6 +343,8 @@ pub enum UiTarget {
     StockSymbolInput,
     TimeFrame,
     TimeFrameMenu,
+    Indicator,
+    IndicatorMenu,
 }
 
 impl UiTarget {
@@ -337,6 +355,8 @@ impl UiTarget {
             Self::StockSymbolInput => 1,
             Self::TimeFrame => 0,
             Self::TimeFrameMenu => 1,
+            Self::Indicator => 0,
+            Self::IndicatorMenu => 1,
         }
     }
 }
@@ -404,6 +424,48 @@ impl FrameRateCounter {
         match self.frame_time.load(atomic::Ordering::Relaxed) {
             0 => None,
             frame_time => Some(Duration::milliseconds(frame_time as i64)),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, EnumIter, Eq, PartialEq)]
+pub enum Indicator {
+    BollingerBands,
+    ExponentialMovingAverage,
+    // MovingAverageConvergenceDivergence,
+    // RelativeStrengthIndex,
+    SimpleMovingAverage,
+}
+
+impl FromStr for Indicator {
+    type Err = ParseIndicatorError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "Bollinger Bands" => Ok(Self::BollingerBands),
+            "EMA" => Ok(Self::ExponentialMovingAverage),
+            // "MACD" => Ok(Self::MovingAverageConvergenceDivergence),
+            "Moving Average" => Ok(Self::SimpleMovingAverage),
+            // "RSI" => Ok(Self::RelativeStrengthIndex),
+            _ => Err(ParseIndicatorError::Invalid),
+        }
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum ParseIndicatorError {
+    #[error("invalid indicator literal")]
+    Invalid,
+}
+
+impl fmt::Display for Indicator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::BollingerBands => write!(f, "Bollinger Bands"),
+            Self::ExponentialMovingAverage => write!(f, "EMA"),
+            // Self::MovingAverageConvergenceDivergence => write!(f, "MACD"),
+            Self::SimpleMovingAverage => write!(f, "Moving Average"),
+            // Self::RelativeStrengthIndex => write!(f, "RSI"),
         }
     }
 }

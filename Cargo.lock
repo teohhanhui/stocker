@@ -390,6 +390,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "error-chain"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ff511d5dc435d703f4971bc399647c9bc38e20cb41452e3b9feb4765419ed3f3"
+dependencies = [
+ "backtrace",
+]
+
+[[package]]
 name = "fake-simd"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1597,6 +1606,7 @@ dependencies = [
  "smol-potat",
  "strum",
  "strum_macros",
+ "ta",
  "thiserror",
  "tui",
  "yahoo-finance",
@@ -1629,6 +1639,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-xid",
+]
+
+[[package]]
+name = "ta"
+version = "0.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7ac24971ba937bd20ac591204c349879b76fd364110739a73ab573b447f4ddfa"
+dependencies = [
+ "error-chain",
 ]
 
 [[package]]
