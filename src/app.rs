@@ -1,13 +1,18 @@
 use crate::stock::Stock;
 use anyhow::Context;
 use chrono::{DateTime, Duration, Utc};
+use derive_more::{Display, From, FromStr, Into};
 use im::{ordmap, ordmap::OrdMap};
 use math::round;
 use parking_lot::{RwLock, RwLockWriteGuard};
+use shrinkwraprs::Shrinkwrap;
 use std::cmp::Ordering;
 use std::fmt;
 use std::str::FromStr;
-use std::sync::atomic::{self, AtomicU16};
+use std::{
+    num::ParseIntError,
+    sync::atomic::{self, AtomicU16},
+};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use thiserror::Error;
@@ -111,6 +116,20 @@ impl UiState {
         Ok(())
     }
 
+    pub fn set_indicator(&mut self, indicator: Indicator) -> anyhow::Result<()> {
+        self.indicator = Some(indicator);
+        self.indicator_menu_state.select(indicator)?;
+
+        Ok(())
+    }
+
+    pub fn clear_indicator(&mut self) -> anyhow::Result<()> {
+        self.indicator = None;
+        self.indicator_menu_state.clear_selection()?;
+
+        Ok(())
+    }
+
     pub fn input_cursor(
         &self,
         input_state: &InputState,
@@ -183,20 +202,6 @@ impl UiState {
 
     pub fn clear_target_areas(&self) -> anyhow::Result<()> {
         self.target_areas.write().clear();
-
-        Ok(())
-    }
-
-    pub fn set_indicator(&mut self, indicator: Indicator) -> anyhow::Result<()> {
-        self.indicator = Some(indicator);
-        self.indicator_menu_state.select(indicator)?;
-
-        Ok(())
-    }
-
-    pub fn clear_indicator(&mut self) -> anyhow::Result<()> {
-        self.indicator = None;
-        self.indicator_menu_state.clear_selection()?;
 
         Ok(())
     }
@@ -279,11 +284,13 @@ where
     }
 
     pub fn select_prev(&self) -> anyhow::Result<()> {
-        let selected = self.list_state.read().selected().unwrap_or_else(|| 0_usize);
+        let selected = self
+            .list_state
+            .read()
+            .selected()
+            .with_context(|| "cannot select previous item when nothing is selected")?;
 
-        if selected == 0 {
-            self.clear_selection()?;
-        } else if selected > 0 {
+        if selected > 0 {
             self.select_nth(selected - 1)?;
         }
 
@@ -291,14 +298,14 @@ where
     }
 
     pub fn select_next(&self) -> anyhow::Result<()> {
-        let selected = self.list_state.read().selected();
+        let selected = self
+            .list_state
+            .read()
+            .selected()
+            .with_context(|| "cannot select next item when nothing is selected")?;
 
-        if let Some(selected) = selected {
-            if selected < self.items.len() - 1 {
-                self.select_nth(selected + 1)?;
-            }
-        } else {
-            self.select_nth(0)?;
+        if selected < self.items.len() - 1 {
+            self.select_nth(selected + 1)?;
         }
 
         Ok(())
@@ -338,25 +345,25 @@ impl Default for InputState {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum UiTarget {
+    Indicator,
+    IndicatorMenu,
     StockName,
     StockSymbol,
     StockSymbolInput,
     TimeFrame,
     TimeFrameMenu,
-    Indicator,
-    IndicatorMenu,
 }
 
 impl UiTarget {
     pub fn zindex(self) -> i8 {
         match self {
+            Self::Indicator => 0,
+            Self::IndicatorMenu => 1,
             Self::StockName => 0,
             Self::StockSymbol => 0,
             Self::StockSymbolInput => 1,
             Self::TimeFrame => 0,
             Self::TimeFrameMenu => 1,
-            Self::Indicator => 0,
-            Self::IndicatorMenu => 1,
         }
     }
 }
@@ -431,10 +438,22 @@ impl FrameRateCounter {
 #[derive(Clone, Copy, Debug, EnumIter, Eq, PartialEq)]
 pub enum Indicator {
     BollingerBands,
-    ExponentialMovingAverage,
+    ExponentialMovingAverage(Period),
     // MovingAverageConvergenceDivergence,
     // RelativeStrengthIndex,
-    SimpleMovingAverage,
+    SimpleMovingAverage(Period),
+}
+
+#[derive(
+    Clone, Copy, Debug, Display, Eq, From, FromStr, Into, Ord, PartialEq, PartialOrd, Shrinkwrap,
+)]
+// #[from(forward)]
+pub struct Period(u16);
+
+impl Default for Period {
+    fn default() -> Self {
+        Period(50)
+    }
 }
 
 impl FromStr for Indicator {
@@ -442,11 +461,28 @@ impl FromStr for Indicator {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "Bollinger Bands" => Ok(Self::BollingerBands),
-            "EMA" => Ok(Self::ExponentialMovingAverage),
+            "BB" => Ok(Self::BollingerBands),
+            s if s.starts_with("EMA") => {
+                let period = &s[3..];
+                let period = period.parse().map_err(|err| ParseIndicatorError::Parse {
+                    period: period.to_owned(),
+                    source: err,
+                })?;
+
+                Ok(Self::ExponentialMovingAverage(period))
+            }
             // "MACD" => Ok(Self::MovingAverageConvergenceDivergence),
-            "Moving Average" => Ok(Self::SimpleMovingAverage),
             // "RSI" => Ok(Self::RelativeStrengthIndex),
+            s if s.starts_with("SMA") => {
+                let period = &s[3..];
+                let period = period.parse().map_err(|err| ParseIndicatorError::Parse {
+                    period: period.to_owned(),
+                    source: err,
+                })?;
+
+                Ok(Self::SimpleMovingAverage(period))
+            }
+            "" => Err(ParseIndicatorError::Empty),
             _ => Err(ParseIndicatorError::Invalid),
         }
     }
@@ -454,18 +490,25 @@ impl FromStr for Indicator {
 
 #[derive(Debug, Error)]
 pub enum ParseIndicatorError {
+    #[error("cannot parse indicator from empty string")]
+    Empty,
     #[error("invalid indicator literal")]
     Invalid,
+    #[error("invalid indicator period: {}", .period)]
+    Parse {
+        period: String,
+        source: ParseIntError,
+    },
 }
 
 impl fmt::Display for Indicator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::BollingerBands => write!(f, "Bollinger Bands"),
-            Self::ExponentialMovingAverage => write!(f, "EMA"),
+            Self::ExponentialMovingAverage(period) => write!(f, "EMA{}", period),
             // Self::MovingAverageConvergenceDivergence => write!(f, "MACD"),
-            Self::SimpleMovingAverage => write!(f, "Moving Average"),
             // Self::RelativeStrengthIndex => write!(f, "RSI"),
+            Self::SimpleMovingAverage(period) => write!(f, "SMA{}", period),
         }
     }
 }
@@ -529,7 +572,7 @@ impl FromStr for TimeFrame {
             "2Y" | "2y" => Ok(Self::TwoYears),
             "5Y" | "5y" => Ok(Self::FiveYears),
             "10Y" | "10y" => Ok(Self::TenYears),
-            "MAX" | "max" => Ok(Self::Max),
+            "Max" | "max" => Ok(Self::Max),
             "" => Err(ParseTimeFrameError::Empty),
             _ => Err(ParseTimeFrameError::Invalid),
         }
@@ -556,7 +599,7 @@ impl fmt::Display for TimeFrame {
             Self::TwoYears => write!(f, "2Y"),
             Self::FiveYears => write!(f, "5Y"),
             Self::TenYears => write!(f, "10Y"),
-            Self::Max => write!(f, "MAX"),
+            Self::Max => write!(f, "Max"),
         }
     }
 }

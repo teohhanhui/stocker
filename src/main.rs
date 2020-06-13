@@ -1,5 +1,5 @@
 use crate::{
-    app::{App, TimeFrame, UiState, UiTarget},
+    app::{App, Indicator, TimeFrame, UiState, UiTarget},
     stock::Stock,
 };
 use argh::FromArgs;
@@ -31,6 +31,9 @@ struct Args {
     /// debug draw
     #[argh(switch)]
     debug_draw: bool,
+    /// indicator for technical analysis
+    #[argh(option, short = 'i')]
+    indicator: Option<Indicator>,
     /// stock symbol
     #[argh(option, short = 's', default = "DEFAULT_SYMBOL.to_owned()")]
     symbol: String,
@@ -131,6 +134,9 @@ async fn main() -> anyhow::Result<()> {
         ui_state: {
             let mut ui_state = UiState::default();
             ui_state.set_time_frame(args.time_frame)?;
+            if let Some(indicator) = args.indicator {
+                ui_state.set_indicator(indicator)?;
+            }
             ui_state.set_debug_draw(args.debug_draw)?;
             ui_state
         },
@@ -199,6 +205,23 @@ async fn main() -> anyhow::Result<()> {
                 KeyCode::Backspace if app.ui_state.stock_symbol_input_state.active => {
                     app.ui_state.stock_symbol_input_state.value.pop();
                 }
+                KeyCode::Enter if app.ui_state.indicator_menu_state.active => {
+                    if let Some(selected) = app.ui_state.indicator_menu_state.selected() {
+                        app.ui_state.set_indicator(selected)?;
+                    } else {
+                        app.ui_state.clear_indicator()?;
+                    }
+
+                    app.ui_state.indicator_menu_state.active = false;
+
+                    app.stock
+                        .load_historical_prices(
+                            app.ui_state.time_frame,
+                            app.ui_state.start_date,
+                            app.ui_state.end_date,
+                        )
+                        .await?;
+                }
                 KeyCode::Enter if app.ui_state.stock_symbol_input_state.active => {
                     app.ui_state.stock_symbol_input_state.active = false;
 
@@ -207,22 +230,11 @@ async fn main() -> anyhow::Result<()> {
                     app.load_stock(&app.ui_state.stock_symbol_input_state.value.clone())
                         .await?;
                 }
-                KeyCode::Enter => {
-                    if app.ui_state.time_frame_menu_state.active {
-                        if let Some(selected) = app.ui_state.time_frame_menu_state.selected() {
-                            app.ui_state.set_time_frame(selected)?;
-                        }
+                KeyCode::Enter if app.ui_state.time_frame_menu_state.active => {
+                    app.ui_state
+                        .set_time_frame(app.ui_state.time_frame_menu_state.selected().unwrap())?;
 
-                        app.ui_state.time_frame_menu_state.active = false;
-                    } else if app.ui_state.indicator_menu_state.active {
-                        if let Some(selected) = app.ui_state.indicator_menu_state.selected() {
-                            app.ui_state.set_indicator(selected)?;
-                        } else {
-                            app.ui_state.clear_indicator()?;
-                        }
-
-                        app.ui_state.indicator_menu_state.active = false;
-                    }
+                    app.ui_state.time_frame_menu_state.active = false;
 
                     app.stock
                         .load_historical_prices(
@@ -268,26 +280,32 @@ async fn main() -> anyhow::Result<()> {
                             .await?;
                     }
                 }
-                KeyCode::Up => {
-                    if app.ui_state.time_frame_menu_state.active {
-                        app.ui_state.time_frame_menu_state.select_prev()?;
-                    } else if app.ui_state.indicator_menu_state.active {
+                KeyCode::Up if app.ui_state.indicator_menu_state.active => {
+                    if app.ui_state.indicator_menu_state.selected().is_some() {
                         app.ui_state.indicator_menu_state.select_prev()?;
                     }
                 }
-                KeyCode::Down => {
-                    if app.ui_state.time_frame_menu_state.active {
-                        app.ui_state.time_frame_menu_state.select_next()?;
-                    } else if app.ui_state.indicator_menu_state.active {
+                KeyCode::Up if app.ui_state.time_frame_menu_state.active => {
+                    app.ui_state.time_frame_menu_state.select_prev()?;
+                }
+                KeyCode::Down if app.ui_state.indicator_menu_state.active => {
+                    if app.ui_state.indicator_menu_state.selected().is_some() {
                         app.ui_state.indicator_menu_state.select_next()?;
+                    } else {
+                        app.ui_state.indicator_menu_state.select_nth(0)?;
                     }
                 }
+                KeyCode::Down if app.ui_state.time_frame_menu_state.active => {
+                    app.ui_state.time_frame_menu_state.select_next()?;
+                }
+                KeyCode::Char(_) if app.ui_state.indicator_menu_state.active => {}
                 KeyCode::Char(c) if app.ui_state.stock_symbol_input_state.active => {
                     app.ui_state
                         .stock_symbol_input_state
                         .value
                         .push(c.to_ascii_uppercase());
                 }
+                KeyCode::Char(_) if app.ui_state.time_frame_menu_state.active => {}
                 KeyCode::Char('i') => {
                     app.ui_state.indicator_menu_state.active = true;
                     app.ui_state.stock_symbol_input_state.active = false;
@@ -397,6 +415,7 @@ async fn main() -> anyhow::Result<()> {
                         }
                     }
                     None => {
+                        app.ui_state.indicator_menu_state.active = false;
                         app.ui_state.stock_symbol_input_state.active = false;
                         app.ui_state.time_frame_menu_state.active = false;
                     }
@@ -405,6 +424,13 @@ async fn main() -> anyhow::Result<()> {
             InputEvent::Mouse(_) => {}
             InputEvent::Tick => {}
         };
+
+        if !app.ui_state.indicator_menu_state.active {
+            app.ui_state.indicator_menu_state.clear_selection()?;
+            if let Some(indicator) = app.ui_state.indicator {
+                app.ui_state.indicator_menu_state.select(indicator)?;
+            }
+        }
 
         if !app.ui_state.stock_symbol_input_state.active {
             app.ui_state.stock_symbol_input_state.value.clear();

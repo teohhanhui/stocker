@@ -150,25 +150,11 @@ fn draw_body<B: Backend>(
     let y_axis_bounds = [*price_steps.first().unwrap(), *price_steps.last().unwrap()];
     let y_axis_labels: Vec<_> = price_steps.iter().map(|&p| format!("{:.2}", p)).collect();
 
-    let historical_prices_data: Vec<_> = historical_prices_data.collect();
-    let historical_prices_dataset = Dataset::default()
-        .marker(Marker::Braille)
-        .style(Style::default().fg({
-            let first_price = prices.first().unwrap_or(&0f64);
-            let last_price = prices.last().unwrap_or(&0f64);
-            if last_price >= first_price {
-                Color::Green
-            } else {
-                Color::Red
-            }
-        }))
-        .graph_type(GraphType::Line)
-        .data(&historical_prices_data);
-    let mut historical_prices_datasets: Vec<_> = vec![];
+    let mut historical_prices_datasets = vec![];
 
-    let mut bb_prices_data = (vec![], vec![], vec![]);
-    let mut ema_prices_data = vec![];
-    let mut sma_prices_data = vec![];
+    let bb_data: (Vec<_>, Vec<_>, Vec<_>);
+    let ema_data: Vec<_>;
+    let sma_data: Vec<_>;
     if let Some(indicator) = ui_state.indicator {
         let indicator_prices_data = stock.bars.iter().map(|bar| {
             let mut data_item = DataItem::builder()
@@ -186,7 +172,7 @@ fn draw_body<B: Backend>(
         match indicator {
             Indicator::BollingerBands => {
                 let mut bb = indicators::BollingerBands::default();
-                let indicator_prices_data = indicator_prices_data.fold(
+                bb_data = indicator_prices_data.fold(
                     (vec![], vec![], vec![]),
                     |mut state, (timestamp, data_item)| {
                         let bb_output = bb.next(&data_item);
@@ -197,67 +183,74 @@ fn draw_body<B: Backend>(
                     },
                 );
 
-                bb_prices_data = indicator_prices_data.clone();
+                historical_prices_datasets.push(
+                    Dataset::default()
+                        .marker(Marker::Braille)
+                        .style(Style::default().fg(Color::DarkGray))
+                        .graph_type(GraphType::Line)
+                        .data(&bb_data.0),
+                );
+                historical_prices_datasets.push(
+                    Dataset::default()
+                        .marker(Marker::Braille)
+                        .style(Style::default().fg(Color::DarkGray))
+                        .graph_type(GraphType::Line)
+                        .data(&bb_data.2),
+                );
+                historical_prices_datasets.push(
+                    Dataset::default()
+                        .marker(Marker::Braille)
+                        .style(Style::default().fg(Color::Cyan))
+                        .graph_type(GraphType::Line)
+                        .data(&bb_data.1),
+                );
             }
-            Indicator::ExponentialMovingAverage => {
+            Indicator::ExponentialMovingAverage(_) => {
                 let mut ema = indicators::ExponentialMovingAverage::default();
-                let indicator_prices_data: Vec<_> = indicator_prices_data
+                ema_data = indicator_prices_data
                     .map(|(timestamp, data_item)| (timestamp, ema.next(&data_item)))
                     .collect();
 
-                ema_prices_data = indicator_prices_data.clone();
+                historical_prices_datasets.push(
+                    Dataset::default()
+                        .marker(Marker::Braille)
+                        .style(Style::default().fg(Color::Cyan))
+                        .graph_type(GraphType::Line)
+                        .data(&ema_data),
+                );
             }
-            Indicator::SimpleMovingAverage => {
-                // Yahoo Finance uses 50 as default
-                let mut sma = indicators::SimpleMovingAverage::new(50).unwrap();
-                let indicator_prices_data: Vec<_> = indicator_prices_data
+            Indicator::SimpleMovingAverage(period) => {
+                let mut sma =
+                    indicators::SimpleMovingAverage::new(u16::from(period) as u32).unwrap();
+                sma_data = indicator_prices_data
                     .map(|(timestamp, data_item)| (timestamp, sma.next(&data_item)))
                     .collect();
 
-                sma_prices_data = indicator_prices_data.clone();
+                historical_prices_datasets.push(
+                    Dataset::default()
+                        .marker(Marker::Braille)
+                        .style(Style::default().fg(Color::Cyan))
+                        .graph_type(GraphType::Line)
+                        .data(&sma_data),
+                );
             }
         }
     }
-    if Some(Indicator::BollingerBands) == ui_state.indicator {
-        historical_prices_datasets.push(
-            Dataset::default()
-                .marker(Marker::Braille)
-                .style(Style::default().fg(Color::DarkGray))
-                .graph_type(GraphType::Line)
-                .data(&bb_prices_data.0),
-        );
-        historical_prices_datasets.push(
-            Dataset::default()
-                .marker(Marker::Braille)
-                .style(Style::default().fg(Color::DarkGray))
-                .graph_type(GraphType::Line)
-                .data(&bb_prices_data.2),
-        );
-        historical_prices_datasets.push(
-            Dataset::default()
-                .marker(Marker::Braille)
-                .style(Style::default().fg(Color::Cyan))
-                .graph_type(GraphType::Line)
-                .data(&bb_prices_data.1),
-        );
-    } else if Some(Indicator::ExponentialMovingAverage) == ui_state.indicator {
-        historical_prices_datasets.push(
-            Dataset::default()
-                .marker(Marker::Braille)
-                .style(Style::default().fg(Color::Cyan))
-                .graph_type(GraphType::Line)
-                .data(&ema_prices_data),
-        );
-    } else if Some(Indicator::SimpleMovingAverage) == ui_state.indicator {
-        historical_prices_datasets.push(
-            Dataset::default()
-                .marker(Marker::Braille)
-                .style(Style::default().fg(Color::Cyan))
-                .graph_type(GraphType::Line)
-                .data(&sma_prices_data),
-        );
-    }
-    // Put it last to make sure prices line to appear on top
+
+    let historical_prices_data: Vec<_> = historical_prices_data.collect();
+    let historical_prices_dataset = Dataset::default()
+        .marker(Marker::Braille)
+        .style(Style::default().fg({
+            let first_price = prices.first().unwrap_or(&0f64);
+            let last_price = prices.last().unwrap_or(&0f64);
+            if last_price >= first_price {
+                Color::Green
+            } else {
+                Color::Red
+            }
+        }))
+        .graph_type(GraphType::Line)
+        .data(&historical_prices_data);
     historical_prices_datasets.push(historical_prices_dataset);
 
     let historical_prices_chart = Chart::default()
