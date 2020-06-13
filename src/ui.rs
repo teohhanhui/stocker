@@ -1,4 +1,7 @@
-use crate::app::{App, Indicator, TimeFrame, UiState, UiTarget};
+use crate::{
+    app::{App, Indicator, TimeFrame, UiState, UiTarget},
+    widgets::SelectMenuList,
+};
 use chrono::{Duration, TimeZone, Utc};
 use itertools::Itertools;
 use itertools::MinMaxResult::{MinMax, NoElements, OneElement};
@@ -12,7 +15,7 @@ use tui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     symbols::Marker,
-    widgets::{Axis, Block, Borders, Chart, Clear, Dataset, GraphType, List, Paragraph, Text},
+    widgets::{Axis, Block, Borders, Chart, Clear, Dataset, GraphType, Paragraph, Text},
     Frame,
 };
 use yahoo_finance::Timestamped;
@@ -171,7 +174,7 @@ fn draw_body<B: Backend>(
 
         match indicator {
             Indicator::BollingerBands => {
-                let mut bb = indicators::BollingerBands::default();
+                let mut bb = indicators::BollingerBands::new(20, 2.0_f64).unwrap();
                 bb_data = indicator_prices_data.fold(
                     (vec![], vec![], vec![]),
                     |mut state, (timestamp, data_item)| {
@@ -205,8 +208,8 @@ fn draw_body<B: Backend>(
                         .data(&bb_data.1),
                 );
             }
-            Indicator::ExponentialMovingAverage(_) => {
-                let mut ema = indicators::ExponentialMovingAverage::default();
+            Indicator::ExponentialMovingAverage(period) => {
+                let mut ema = indicators::ExponentialMovingAverage::new(*period as u32).unwrap();
                 ema_data = indicator_prices_data
                     .map(|(timestamp, data_item)| (timestamp, ema.next(&data_item)))
                     .collect();
@@ -220,8 +223,7 @@ fn draw_body<B: Backend>(
                 );
             }
             Indicator::SimpleMovingAverage(period) => {
-                let mut sma =
-                    indicators::SimpleMovingAverage::new(u16::from(period) as u32).unwrap();
+                let mut sma = indicators::SimpleMovingAverage::new(*period as u32).unwrap();
                 sma_data = indicator_prices_data
                     .map(|(timestamp, data_item)| (timestamp, sma.next(&data_item)))
                     .collect();
@@ -275,7 +277,7 @@ fn draw_footer<B: Backend>(
 ) -> anyhow::Result<()> {
     let chunks = Layout::default()
         .direction(Direction::Horizontal)
-        .horizontal_margin(if ui_state.time_frame_menu_state.active {
+        .horizontal_margin(if ui_state.time_frame_menu_state.read().active {
             0
         } else {
             1
@@ -294,7 +296,7 @@ fn draw_footer<B: Backend>(
     let indicators_texts = vec![
         Text::styled(
             "Indicator: ",
-            if ui_state.indicator_menu_state.active {
+            if ui_state.indicator_menu_state.read().active {
                 menu_active_base_style
             } else {
                 Style::default()
@@ -304,9 +306,9 @@ fn draw_footer<B: Backend>(
             if let Some(indicator) = ui_state.indicator {
                 indicator.to_string()
             } else {
-                "None".to_string()
+                "None".to_owned()
             },
-            if ui_state.indicator_menu_state.active {
+            if ui_state.indicator_menu_state.read().active {
                 menu_active_base_style
             } else {
                 Style::default()
@@ -314,19 +316,15 @@ fn draw_footer<B: Backend>(
         ),
     ];
     let indicators_paragraph = Paragraph::new(indicators_texts.iter())
-        .block(if ui_state.indicator_menu_state.active {
+        .block(if ui_state.indicator_menu_state.read().active {
             Block::default()
-                .style(if ui_state.indicator_menu_state.active {
-                    menu_active_base_style
-                } else {
-                    Style::default()
-                })
+                .style(menu_active_base_style)
                 .borders(Borders::ALL ^ Borders::TOP)
                 .border_style(Style::default().fg(Color::Gray))
         } else {
             Block::default()
         })
-        .style(if ui_state.indicator_menu_state.active {
+        .style(if ui_state.indicator_menu_state.read().active {
             menu_active_base_style
         } else {
             Style::default()
@@ -337,7 +335,7 @@ fn draw_footer<B: Backend>(
     let time_frame_texts = vec![
         Text::styled(
             "Time frame: ",
-            if ui_state.time_frame_menu_state.active {
+            if ui_state.time_frame_menu_state.read().active {
                 menu_active_base_style
             } else {
                 Style::default()
@@ -345,7 +343,7 @@ fn draw_footer<B: Backend>(
         ),
         Text::styled(
             ui_state.time_frame.to_string(),
-            if ui_state.time_frame_menu_state.active {
+            if ui_state.time_frame_menu_state.read().active {
                 menu_active_base_style
             } else {
                 Style::default()
@@ -353,19 +351,15 @@ fn draw_footer<B: Backend>(
         ),
     ];
     let time_frame_paragraph = Paragraph::new(time_frame_texts.iter())
-        .block(if ui_state.time_frame_menu_state.active {
+        .block(if ui_state.time_frame_menu_state.read().active {
             Block::default()
-                .style(if ui_state.time_frame_menu_state.active {
-                    menu_active_base_style
-                } else {
-                    Style::default()
-                })
+                .style(menu_active_base_style)
                 .borders(Borders::ALL ^ Borders::TOP)
                 .border_style(Style::default().fg(Color::Gray))
         } else {
             Block::default()
         })
-        .style(if ui_state.time_frame_menu_state.active {
+        .style(if ui_state.time_frame_menu_state.read().active {
             menu_active_base_style
         } else {
             Style::default()
@@ -415,7 +409,7 @@ fn draw_overlay<B: Backend>(f: &mut Frame<B>, App { ui_state, .. }: &App) -> any
         ui_state.set_target_area(UiTarget::StockSymbolInput, stock_symbol_input_area)?;
     }
 
-    if ui_state.indicator_menu_state.active {
+    if ui_state.indicator_menu_state.read().active {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints(vec![Constraint::Min(0), Constraint::Length(30)])
@@ -435,25 +429,21 @@ fn draw_overlay<B: Backend>(f: &mut Frame<B>, App { ui_state, .. }: &App) -> any
         let indicator_menu_area = chunks[1];
 
         let indicator_menu_items = Indicator::iter().map(|t| Text::raw(t.to_string()));
-        let indicator_menu_list = List::new(indicator_menu_items)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Gray)),
-            )
+        let indicator_menu_list = SelectMenuList::new(indicator_menu_items)
+            .border_style(Style::default().fg(Color::Gray))
             .highlight_style(highlight_base_style);
 
         f.render_widget(Clear, indicator_menu_area);
         f.render_stateful_widget(
             indicator_menu_list,
             indicator_menu_area,
-            &mut *ui_state.indicator_menu_state.list_state_write(),
+            &mut *ui_state.indicator_menu_state.write(),
         );
 
         ui_state.set_target_area(UiTarget::IndicatorMenu, indicator_menu_area)?;
     }
 
-    if ui_state.time_frame_menu_state.active {
+    if ui_state.time_frame_menu_state.read().active {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints(vec![Constraint::Min(0), Constraint::Length(20)])
@@ -473,19 +463,15 @@ fn draw_overlay<B: Backend>(f: &mut Frame<B>, App { ui_state, .. }: &App) -> any
         let time_frame_menu_area = chunks[1];
 
         let time_frame_menu_items = TimeFrame::iter().map(|t| Text::raw(t.to_string()));
-        let time_frame_menu_list = List::new(time_frame_menu_items)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Gray)),
-            )
+        let time_frame_menu_list = SelectMenuList::new(time_frame_menu_items)
+            .border_style(Style::default().fg(Color::Gray))
             .highlight_style(highlight_base_style);
 
         f.render_widget(Clear, time_frame_menu_area);
         f.render_stateful_widget(
             time_frame_menu_list,
             time_frame_menu_area,
-            &mut *ui_state.time_frame_menu_state.list_state_write(),
+            &mut *ui_state.time_frame_menu_state.write(),
         );
 
         ui_state.set_target_area(UiTarget::TimeFrameMenu, time_frame_menu_area)?;

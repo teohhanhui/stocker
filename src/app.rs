@@ -1,25 +1,21 @@
-use crate::stock::Stock;
-use anyhow::Context;
+use crate::{stock::Stock, widgets::SelectMenuState};
 use chrono::{DateTime, Duration, Utc};
 use derive_more::{Display, From, FromStr, Into};
 use im::{ordmap, ordmap::OrdMap};
 use math::round;
-use parking_lot::{RwLock, RwLockWriteGuard};
+use parking_lot::RwLock;
 use shrinkwraprs::Shrinkwrap;
-use std::cmp::Ordering;
-use std::fmt;
-use std::str::FromStr;
 use std::{
+    cmp::Ordering,
+    fmt,
     num::ParseIntError,
+    str::FromStr,
     sync::atomic::{self, AtomicU16},
 };
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use thiserror::Error;
-use tui::{
-    layout::{Margin, Rect},
-    widgets::ListState,
-};
+use tui::layout::{Margin, Rect};
 use yahoo_finance::Interval;
 
 pub struct App {
@@ -52,12 +48,12 @@ pub struct UiState {
     pub end_date: Option<DateTime<Utc>>,
     pub frame_rate_counter: FrameRateCounter,
     pub indicator: Option<Indicator>,
-    pub indicator_menu_state: MenuState<Indicator>,
+    pub indicator_menu_state: RwLock<SelectMenuState<Indicator>>,
     pub start_date: Option<DateTime<Utc>>,
     pub stock_symbol_input_state: InputState,
     target_areas: RwLock<OrdMap<UiTarget, Rect>>,
     pub time_frame: TimeFrame,
-    pub time_frame_menu_state: MenuState<TimeFrame>,
+    pub time_frame_menu_state: RwLock<SelectMenuState<TimeFrame>>,
 }
 
 impl UiState {
@@ -118,14 +114,14 @@ impl UiState {
 
     pub fn set_indicator(&mut self, indicator: Indicator) -> anyhow::Result<()> {
         self.indicator = Some(indicator);
-        self.indicator_menu_state.select(indicator)?;
+        self.indicator_menu_state.write().select(indicator)?;
 
         Ok(())
     }
 
     pub fn clear_indicator(&mut self) -> anyhow::Result<()> {
         self.indicator = None;
-        self.indicator_menu_state.clear_selection()?;
+        self.indicator_menu_state.write().clear_selection()?;
 
         Ok(())
     }
@@ -151,7 +147,7 @@ impl UiState {
 
     pub fn menu_index<T>(
         &self,
-        menu_state: &MenuState<T>,
+        menu_state: &SelectMenuState<T>,
         menu_area: Rect,
         x: u16,
         y: u16,
@@ -208,7 +204,7 @@ impl UiState {
 
     pub fn set_time_frame(&mut self, time_frame: TimeFrame) -> anyhow::Result<()> {
         self.time_frame = time_frame;
-        self.time_frame_menu_state.select(time_frame)?;
+        self.time_frame_menu_state.write().select(time_frame)?;
 
         self.clear_date_range()?;
 
@@ -218,113 +214,22 @@ impl UiState {
 
 impl Default for UiState {
     fn default() -> Self {
-        const DEFAULT_TIME_FRAME: TimeFrame = TimeFrame::OneMonth;
-
         Self {
             debug_draw: false,
             end_date: None,
             indicator: None,
-            indicator_menu_state: MenuState::new(Indicator::iter()),
+            indicator_menu_state: RwLock::new(SelectMenuState::new(Indicator::iter())),
             frame_rate_counter: FrameRateCounter::new(Duration::milliseconds(1_000)),
             start_date: None,
             stock_symbol_input_state: InputState::default(),
             target_areas: RwLock::new(ordmap! {}),
-            time_frame: DEFAULT_TIME_FRAME,
-            time_frame_menu_state: {
-                let menu_state = MenuState::new(TimeFrame::iter());
-                menu_state.select(DEFAULT_TIME_FRAME).unwrap();
+            time_frame: TimeFrame::default(),
+            time_frame_menu_state: RwLock::new({
+                let mut menu_state = SelectMenuState::new(TimeFrame::iter());
+                menu_state.select(TimeFrame::default()).unwrap();
                 menu_state
-            },
+            }),
         }
-    }
-}
-
-#[derive(Debug)]
-pub struct MenuState<T>
-where
-    T: Clone + PartialEq + ToString,
-{
-    pub active: bool,
-    pub items: Vec<T>,
-    list_state: RwLock<ListState>,
-}
-
-impl<T> MenuState<T>
-where
-    T: Clone + PartialEq + ToString,
-{
-    pub fn new<I>(items: I) -> MenuState<T>
-    where
-        I: IntoIterator<Item = T>,
-    {
-        Self {
-            active: false,
-            items: items.into_iter().collect(),
-            list_state: RwLock::new(ListState::default()),
-        }
-    }
-
-    pub fn selected(&self) -> Option<T> {
-        let selected = self.list_state.read().selected()?;
-
-        Some(self.items[selected].clone())
-    }
-
-    pub fn select(&self, item: T) -> anyhow::Result<()> {
-        let n = self
-            .items
-            .iter()
-            .cloned()
-            .position(|t| t == item)
-            .with_context(|| "item not found")?;
-
-        self.select_nth(n)?;
-
-        Ok(())
-    }
-
-    pub fn select_prev(&self) -> anyhow::Result<()> {
-        let selected = self
-            .list_state
-            .read()
-            .selected()
-            .with_context(|| "cannot select previous item when nothing is selected")?;
-
-        if selected > 0 {
-            self.select_nth(selected - 1)?;
-        }
-
-        Ok(())
-    }
-
-    pub fn select_next(&self) -> anyhow::Result<()> {
-        let selected = self
-            .list_state
-            .read()
-            .selected()
-            .with_context(|| "cannot select next item when nothing is selected")?;
-
-        if selected < self.items.len() - 1 {
-            self.select_nth(selected + 1)?;
-        }
-
-        Ok(())
-    }
-
-    pub fn select_nth(&self, n: usize) -> anyhow::Result<()> {
-        self.list_state.write().select(Some(n));
-
-        Ok(())
-    }
-
-    pub fn clear_selection(&self) -> anyhow::Result<()> {
-        self.list_state.write().select(None);
-
-        Ok(())
-    }
-
-    pub fn list_state_write(&self) -> RwLockWriteGuard<ListState> {
-        self.list_state.write()
     }
 }
 
@@ -447,7 +352,6 @@ pub enum Indicator {
 #[derive(
     Clone, Copy, Debug, Display, Eq, From, FromStr, Into, Ord, PartialEq, PartialOrd, Shrinkwrap,
 )]
-// #[from(forward)]
 pub struct Period(u16);
 
 impl Default for Period {
@@ -555,6 +459,12 @@ impl TimeFrame {
             Self::TenYears => Interval::_10y,
             Self::Max => Interval::_max,
         }
+    }
+}
+
+impl Default for TimeFrame {
+    fn default() -> Self {
+        Self::OneMonth
     }
 }
 
