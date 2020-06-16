@@ -114,14 +114,18 @@ impl UiState {
 
     pub fn set_indicator(&mut self, indicator: Indicator) -> anyhow::Result<()> {
         self.indicator = Some(indicator);
-        self.indicator_menu_state.write().select(indicator)?;
+        let mut indicator_menu_state = self.indicator_menu_state.write();
+        indicator_menu_state.clear_selection()?;
+        indicator_menu_state.select(indicator).ok();
 
         Ok(())
     }
 
     pub fn clear_indicator(&mut self) -> anyhow::Result<()> {
         self.indicator = None;
-        self.indicator_menu_state.write().clear_selection()?;
+        let mut indicator_menu_state = self.indicator_menu_state.write();
+        indicator_menu_state.clear_selection()?;
+        indicator_menu_state.select_nth(0)?;
 
         Ok(())
     }
@@ -170,8 +174,14 @@ impl UiState {
                 todo!("not sure how to select an item from scrollable list");
             }
             let n: usize = (y - inner_area.top()) as usize;
+            let l = menu_state.items.len();
+            let l = if menu_state.allow_empty_selection {
+                l + 1
+            } else {
+                l
+            };
 
-            if n < menu_state.items.len() {
+            if n < l {
                 return Some(n);
             }
         }
@@ -218,7 +228,12 @@ impl Default for UiState {
             debug_draw: false,
             end_date: None,
             indicator: None,
-            indicator_menu_state: RwLock::new(SelectMenuState::new(Indicator::iter())),
+            indicator_menu_state: RwLock::new({
+                let mut menu_state = SelectMenuState::new(Indicator::iter());
+                menu_state.allow_empty_selection = true;
+                menu_state.select_nth(0).unwrap();
+                menu_state
+            }),
             frame_rate_counter: FrameRateCounter::new(Duration::milliseconds(1_000)),
             start_date: None,
             stock_symbol_input_state: InputState::default(),
@@ -250,25 +265,25 @@ impl Default for InputState {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum UiTarget {
-    Indicator,
-    IndicatorMenu,
+    IndicatorBox,
+    IndicatorList,
     StockName,
     StockSymbol,
     StockSymbolInput,
-    TimeFrame,
-    TimeFrameMenu,
+    TimeFrameBox,
+    TimeFrameList,
 }
 
 impl UiTarget {
     pub fn zindex(self) -> i8 {
         match self {
-            Self::Indicator => 0,
-            Self::IndicatorMenu => 1,
+            Self::IndicatorBox => 0,
+            Self::IndicatorList => 1,
             Self::StockName => 0,
             Self::StockSymbol => 0,
             Self::StockSymbolInput => 1,
-            Self::TimeFrame => 0,
-            Self::TimeFrameMenu => 1,
+            Self::TimeFrameBox => 0,
+            Self::TimeFrameList => 1,
         }
     }
 }

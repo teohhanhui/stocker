@@ -1,3 +1,3 @@
-pub use select_menu::{SelectMenuList, SelectMenuState};
+pub use select_menu::{SelectMenuBox, SelectMenuList, SelectMenuState};
 
 mod select_menu;

@@ -212,13 +212,14 @@ async fn main() -> anyhow::Result<()> {
 
                     app.ui_state.indicator_menu_state.write().active = false;
 
-                    app.stock
-                        .load_historical_prices(
-                            app.ui_state.time_frame,
-                            app.ui_state.start_date,
-                            app.ui_state.end_date,
-                        )
-                        .await?;
+                    // TODO: load the correct date range based on indicator period
+                    // app.stock
+                    //     .load_historical_prices(
+                    //         app.ui_state.time_frame,
+                    //         app.ui_state.start_date,
+                    //         app.ui_state.end_date,
+                    //     )
+                    //     .await?;
                 }
                 KeyCode::Enter if app.ui_state.stock_symbol_input_state.active => {
                     app.ui_state.stock_symbol_input_state.active = false;
@@ -282,31 +283,13 @@ async fn main() -> anyhow::Result<()> {
                     }
                 }
                 KeyCode::Up if app.ui_state.indicator_menu_state.read().active => {
-                    if app
-                        .ui_state
-                        .indicator_menu_state
-                        .read()
-                        .selected()
-                        .is_some()
-                    {
-                        app.ui_state.indicator_menu_state.write().select_prev()?;
-                    }
+                    app.ui_state.indicator_menu_state.write().select_prev()?;
                 }
                 KeyCode::Up if app.ui_state.time_frame_menu_state.read().active => {
                     app.ui_state.time_frame_menu_state.write().select_prev()?;
                 }
                 KeyCode::Down if app.ui_state.indicator_menu_state.read().active => {
-                    if app
-                        .ui_state
-                        .indicator_menu_state
-                        .read()
-                        .selected()
-                        .is_some()
-                    {
-                        app.ui_state.indicator_menu_state.write().select_next()?;
-                    } else {
-                        app.ui_state.indicator_menu_state.write().select_nth(0)?;
-                    }
+                    app.ui_state.indicator_menu_state.write().select_next()?;
                 }
                 KeyCode::Down if app.ui_state.time_frame_menu_state.read().active => {
                     app.ui_state.time_frame_menu_state.write().select_next()?;
@@ -350,7 +333,7 @@ async fn main() -> anyhow::Result<()> {
             },
             InputEvent::Mouse(MouseEvent::Up(MouseButton::Left, col, row, _)) => {
                 match app.ui_state.target_area(col, row) {
-                    Some((UiTarget::Indicator, _)) => {
+                    Some((UiTarget::IndicatorBox, _)) => {
                         app.ui_state.indicator_menu_state.write().active = !{
                             let indicator_menu_state = app.ui_state.indicator_menu_state.read();
                             indicator_menu_state.active
@@ -364,7 +347,7 @@ async fn main() -> anyhow::Result<()> {
                         app.ui_state.indicator_menu_state.write().active = false;
                         app.ui_state.time_frame_menu_state.write().active = false;
                     }
-                    Some((UiTarget::TimeFrame, _)) => {
+                    Some((UiTarget::TimeFrameBox, _)) => {
                         app.ui_state.time_frame_menu_state.write().active = !{
                             let time_frame_menu_state = app.ui_state.time_frame_menu_state.read();
                             time_frame_menu_state.active
@@ -372,7 +355,7 @@ async fn main() -> anyhow::Result<()> {
                         app.ui_state.indicator_menu_state.write().active = false;
                         app.ui_state.stock_symbol_input_state.active = false;
                     }
-                    Some((UiTarget::IndicatorMenu, area)) => {
+                    Some((UiTarget::IndicatorList, area)) => {
                         if let Some(n) = {
                             let indicator_menu_state = app.ui_state.indicator_menu_state.read();
                             app.ui_state
@@ -385,25 +368,29 @@ async fn main() -> anyhow::Result<()> {
                                 ui::draw(&mut f, &app).expect("Draw failed");
                             })?;
 
-                            let selected_indicator = {
+                            if let Some(selected_indicator) = {
                                 let indicator_menu_state = app.ui_state.indicator_menu_state.read();
-                                indicator_menu_state.selected().unwrap()
-                            };
-                            app.ui_state.set_indicator(selected_indicator)?;
+                                indicator_menu_state.selected()
+                            } {
+                                app.ui_state.set_indicator(selected_indicator)?;
+                            } else {
+                                app.ui_state.clear_indicator()?;
+                            }
 
                             app.ui_state.indicator_menu_state.write().active = false;
 
-                            app.stock
-                                .load_historical_prices(
-                                    app.ui_state.time_frame,
-                                    app.ui_state.start_date,
-                                    app.ui_state.end_date,
-                                )
-                                .await?;
+                            // TODO: load the correct date range based on indicator period
+                            // app.stock
+                            //     .load_historical_prices(
+                            //         app.ui_state.time_frame,
+                            //         app.ui_state.start_date,
+                            //         app.ui_state.end_date,
+                            //     )
+                            //     .await?;
                         }
                     }
                     Some((UiTarget::StockSymbolInput, _)) => {}
-                    Some((UiTarget::TimeFrameMenu, area)) => {
+                    Some((UiTarget::TimeFrameList, area)) => {
                         if let Some(n) = {
                             let time_frame_menu_state = app.ui_state.time_frame_menu_state.read();
                             app.ui_state
@@ -449,7 +436,9 @@ async fn main() -> anyhow::Result<()> {
             let mut indicator_menu_state = app.ui_state.indicator_menu_state.write();
             indicator_menu_state.clear_selection()?;
             if let Some(indicator) = app.ui_state.indicator {
-                indicator_menu_state.select(indicator)?;
+                indicator_menu_state.select(indicator).ok();
+            } else {
+                indicator_menu_state.select_nth(0)?;
             }
         }
 
