@@ -1,28 +1,27 @@
 use crate::{
-    app::{App, TimeFrame, UiState, UiTarget},
+    app::{App, Indicator, TimeFrame, UiState, UiTarget},
     stock::Stock,
 };
 use argh::FromArgs;
-use async_std::prelude::*;
-use async_std::stream;
+use async_std::{prelude::*, stream};
 use crossterm::{
     cursor,
     event::{self, Event, EventStream, KeyCode, KeyEvent, MouseButton, MouseEvent},
     execute, terminal,
 };
-use std::io::{self, Write};
-use std::panic;
-use std::str::FromStr;
-use std::time;
+use std::{
+    io::{self, Write},
+    panic, time,
+};
 use tui::{backend::CrosstermBackend, Terminal};
 use yahoo_finance::Timestamped;
 
 mod app;
 mod stock;
 mod ui;
+mod widgets;
 
 const DEFAULT_SYMBOL: &str = "TSLA";
-const DEFAULT_TIME_FRAME: &str = "1mo";
 const TICK_RATE: u64 = 100;
 
 /// Stocks dashboard
@@ -31,15 +30,14 @@ struct Args {
     /// debug draw
     #[argh(switch)]
     debug_draw: bool,
+    /// indicator for technical analysis
+    #[argh(option, short = 'i')]
+    indicator: Option<Indicator>,
     /// stock symbol
     #[argh(option, short = 's', default = "DEFAULT_SYMBOL.to_owned()")]
     symbol: String,
     /// time frame for historical prices
-    #[argh(
-        option,
-        short = 't',
-        default = "TimeFrame::from_str(DEFAULT_TIME_FRAME).unwrap()"
-    )]
+    #[argh(option, short = 't', default = "TimeFrame::default()")]
     time_frame: TimeFrame,
 }
 
@@ -131,6 +129,9 @@ async fn main() -> anyhow::Result<()> {
         ui_state: {
             let mut ui_state = UiState::default();
             ui_state.set_time_frame(args.time_frame)?;
+            if let Some(indicator) = args.indicator {
+                ui_state.set_indicator(indicator)?;
+            }
             ui_state.set_debug_draw(args.debug_draw)?;
             ui_state
         },
@@ -199,6 +200,27 @@ async fn main() -> anyhow::Result<()> {
                 KeyCode::Backspace if app.ui_state.stock_symbol_input_state.active => {
                     app.ui_state.stock_symbol_input_state.value.pop();
                 }
+                KeyCode::Enter if app.ui_state.indicator_menu_state.read().active => {
+                    if let Some(selected_indicator) = {
+                        let indicator_menu_state = app.ui_state.indicator_menu_state.read();
+                        indicator_menu_state.selected()
+                    } {
+                        app.ui_state.set_indicator(selected_indicator)?;
+                    } else {
+                        app.ui_state.clear_indicator()?;
+                    }
+
+                    app.ui_state.indicator_menu_state.write().active = false;
+
+                    // TODO: load the correct date range based on indicator period
+                    // app.stock
+                    //     .load_historical_prices(
+                    //         app.ui_state.time_frame,
+                    //         app.ui_state.start_date,
+                    //         app.ui_state.end_date,
+                    //     )
+                    //     .await?;
+                }
                 KeyCode::Enter if app.ui_state.stock_symbol_input_state.active => {
                     app.ui_state.stock_symbol_input_state.active = false;
 
@@ -207,11 +229,14 @@ async fn main() -> anyhow::Result<()> {
                     app.load_stock(&app.ui_state.stock_symbol_input_state.value.clone())
                         .await?;
                 }
-                KeyCode::Enter if app.ui_state.time_frame_menu_state.active => {
-                    app.ui_state
-                        .set_time_frame(app.ui_state.time_frame_menu_state.selected().unwrap())?;
+                KeyCode::Enter if app.ui_state.time_frame_menu_state.read().active => {
+                    let selected_time_frame = {
+                        let time_frame_menu_state = app.ui_state.time_frame_menu_state.read();
+                        time_frame_menu_state.selected().unwrap()
+                    };
+                    app.ui_state.set_time_frame(selected_time_frame)?;
 
-                    app.ui_state.time_frame_menu_state.active = false;
+                    app.ui_state.time_frame_menu_state.write().active = false;
 
                     app.stock
                         .load_historical_prices(
@@ -223,7 +248,7 @@ async fn main() -> anyhow::Result<()> {
                 }
                 KeyCode::Left
                     if !app.ui_state.stock_symbol_input_state.active
-                        && !app.ui_state.time_frame_menu_state.active =>
+                        && !app.ui_state.time_frame_menu_state.read().active =>
                 {
                     if let (Some(_), Some(first_bar)) =
                         (app.ui_state.time_frame.duration(), app.stock.bars.first())
@@ -241,7 +266,7 @@ async fn main() -> anyhow::Result<()> {
                 }
                 KeyCode::Right
                     if !app.ui_state.stock_symbol_input_state.active
-                        && !app.ui_state.time_frame_menu_state.active =>
+                        && !app.ui_state.time_frame_menu_state.read().active =>
                 {
                     if let (Some(_), Some(last_bar)) =
                         (app.ui_state.time_frame.duration(), app.stock.bars.last())
@@ -257,70 +282,135 @@ async fn main() -> anyhow::Result<()> {
                             .await?;
                     }
                 }
-                KeyCode::Up if app.ui_state.time_frame_menu_state.active => {
-                    app.ui_state.time_frame_menu_state.select_prev()?;
+                KeyCode::Up if app.ui_state.indicator_menu_state.read().active => {
+                    app.ui_state.indicator_menu_state.write().select_prev()?;
                 }
-                KeyCode::Down if app.ui_state.time_frame_menu_state.active => {
-                    app.ui_state.time_frame_menu_state.select_next()?;
+                KeyCode::Up if app.ui_state.time_frame_menu_state.read().active => {
+                    app.ui_state.time_frame_menu_state.write().select_prev()?;
                 }
+                KeyCode::Down if app.ui_state.indicator_menu_state.read().active => {
+                    app.ui_state.indicator_menu_state.write().select_next()?;
+                }
+                KeyCode::Down if app.ui_state.time_frame_menu_state.read().active => {
+                    app.ui_state.time_frame_menu_state.write().select_next()?;
+                }
+                KeyCode::Char(_) if app.ui_state.indicator_menu_state.read().active => {}
                 KeyCode::Char(c) if app.ui_state.stock_symbol_input_state.active => {
                     app.ui_state
                         .stock_symbol_input_state
                         .value
                         .push(c.to_ascii_uppercase());
                 }
-                KeyCode::Char(_) if app.ui_state.time_frame_menu_state.active => {}
+                KeyCode::Char(_) if app.ui_state.time_frame_menu_state.read().active => {}
+                KeyCode::Char('i') => {
+                    app.ui_state.indicator_menu_state.write().active = true;
+                    app.ui_state.stock_symbol_input_state.active = false;
+                    app.ui_state.time_frame_menu_state.write().active = false;
+                }
                 KeyCode::Char('q') => {
                     break;
                 }
                 KeyCode::Char('s') => {
                     app.ui_state.stock_symbol_input_state.active = true;
-                    app.ui_state.time_frame_menu_state.active = false;
+                    app.ui_state.indicator_menu_state.write().active = false;
+                    app.ui_state.time_frame_menu_state.write().active = false;
                 }
                 KeyCode::Char('t') => {
-                    app.ui_state.time_frame_menu_state.active = true;
+                    app.ui_state.time_frame_menu_state.write().active = true;
                     app.ui_state.stock_symbol_input_state.active = false;
+                    app.ui_state.indicator_menu_state.write().active = false;
+                }
+                KeyCode::Esc if app.ui_state.indicator_menu_state.read().active => {
+                    app.ui_state.indicator_menu_state.write().active = false;
                 }
                 KeyCode::Esc if app.ui_state.stock_symbol_input_state.active => {
                     app.ui_state.stock_symbol_input_state.active = false;
                 }
-                KeyCode::Esc if app.ui_state.time_frame_menu_state.active => {
-                    app.ui_state.time_frame_menu_state.active = false;
+                KeyCode::Esc if app.ui_state.time_frame_menu_state.read().active => {
+                    app.ui_state.time_frame_menu_state.write().active = false;
                 }
                 _ => {}
             },
             InputEvent::Mouse(MouseEvent::Up(MouseButton::Left, col, row, _)) => {
                 match app.ui_state.target_area(col, row) {
+                    Some((UiTarget::IndicatorBox, _)) => {
+                        app.ui_state.indicator_menu_state.write().active = !{
+                            let indicator_menu_state = app.ui_state.indicator_menu_state.read();
+                            indicator_menu_state.active
+                        };
+                        app.ui_state.stock_symbol_input_state.active = false;
+                        app.ui_state.time_frame_menu_state.write().active = false;
+                    }
                     Some((UiTarget::StockSymbol, _)) | Some((UiTarget::StockName, _)) => {
                         app.ui_state.stock_symbol_input_state.active =
                             !app.ui_state.stock_symbol_input_state.active;
-                        app.ui_state.time_frame_menu_state.active = false;
+                        app.ui_state.indicator_menu_state.write().active = false;
+                        app.ui_state.time_frame_menu_state.write().active = false;
                     }
-                    Some((UiTarget::TimeFrame, _)) => {
-                        app.ui_state.time_frame_menu_state.active =
-                            !app.ui_state.time_frame_menu_state.active;
+                    Some((UiTarget::TimeFrameBox, _)) => {
+                        app.ui_state.time_frame_menu_state.write().active = !{
+                            let time_frame_menu_state = app.ui_state.time_frame_menu_state.read();
+                            time_frame_menu_state.active
+                        };
+                        app.ui_state.indicator_menu_state.write().active = false;
                         app.ui_state.stock_symbol_input_state.active = false;
                     }
-                    Some((UiTarget::StockSymbolInput, _)) => {}
-                    Some((UiTarget::TimeFrameMenu, area)) => {
-                        if let Some(n) = app.ui_state.menu_index(
-                            &app.ui_state.time_frame_menu_state,
-                            area,
-                            col,
-                            row,
-                        ) {
-                            app.ui_state.time_frame_menu_state.select_nth(n)?;
+                    Some((UiTarget::IndicatorList, area)) => {
+                        if let Some(n) = {
+                            let indicator_menu_state = app.ui_state.indicator_menu_state.read();
+                            app.ui_state
+                                .menu_index(&*indicator_menu_state, area, col, row)
+                        } {
+                            app.ui_state.indicator_menu_state.write().select_nth(n)?;
 
                             // Trigger draw to highlight the selected item
                             terminal.draw(|mut f| {
                                 ui::draw(&mut f, &app).expect("Draw failed");
                             })?;
 
-                            app.ui_state.set_time_frame(
-                                app.ui_state.time_frame_menu_state.selected().unwrap(),
-                            )?;
+                            if let Some(selected_indicator) = {
+                                let indicator_menu_state = app.ui_state.indicator_menu_state.read();
+                                indicator_menu_state.selected()
+                            } {
+                                app.ui_state.set_indicator(selected_indicator)?;
+                            } else {
+                                app.ui_state.clear_indicator()?;
+                            }
 
-                            app.ui_state.time_frame_menu_state.active = false;
+                            app.ui_state.indicator_menu_state.write().active = false;
+
+                            // TODO: load the correct date range based on indicator period
+                            // app.stock
+                            //     .load_historical_prices(
+                            //         app.ui_state.time_frame,
+                            //         app.ui_state.start_date,
+                            //         app.ui_state.end_date,
+                            //     )
+                            //     .await?;
+                        }
+                    }
+                    Some((UiTarget::StockSymbolInput, _)) => {}
+                    Some((UiTarget::TimeFrameList, area)) => {
+                        if let Some(n) = {
+                            let time_frame_menu_state = app.ui_state.time_frame_menu_state.read();
+                            app.ui_state
+                                .menu_index(&*time_frame_menu_state, area, col, row)
+                        } {
+                            app.ui_state.time_frame_menu_state.write().select_nth(n)?;
+
+                            // Trigger draw to highlight the selected item
+                            terminal.draw(|mut f| {
+                                ui::draw(&mut f, &app).expect("Draw failed");
+                            })?;
+
+                            let selected_time_frame = {
+                                let time_frame_menu_state =
+                                    app.ui_state.time_frame_menu_state.read();
+                                time_frame_menu_state.selected().unwrap()
+                            };
+                            app.ui_state.set_time_frame(selected_time_frame)?;
+
+                            app.ui_state.time_frame_menu_state.write().active = false;
 
                             app.stock
                                 .load_historical_prices(
@@ -332,8 +422,9 @@ async fn main() -> anyhow::Result<()> {
                         }
                     }
                     None => {
+                        app.ui_state.indicator_menu_state.write().active = false;
                         app.ui_state.stock_symbol_input_state.active = false;
-                        app.ui_state.time_frame_menu_state.active = false;
+                        app.ui_state.time_frame_menu_state.write().active = false;
                     }
                 }
             }
@@ -341,15 +432,24 @@ async fn main() -> anyhow::Result<()> {
             InputEvent::Tick => {}
         };
 
+        if !app.ui_state.indicator_menu_state.read().active {
+            let mut indicator_menu_state = app.ui_state.indicator_menu_state.write();
+            indicator_menu_state.clear_selection()?;
+            if let Some(indicator) = app.ui_state.indicator {
+                indicator_menu_state.select(indicator).ok();
+            } else {
+                indicator_menu_state.select_nth(0)?;
+            }
+        }
+
         if !app.ui_state.stock_symbol_input_state.active {
             app.ui_state.stock_symbol_input_state.value.clear();
         }
 
-        if !app.ui_state.time_frame_menu_state.active {
-            app.ui_state.time_frame_menu_state.clear_selection()?;
-            app.ui_state
-                .time_frame_menu_state
-                .select(app.ui_state.time_frame)?;
+        if !app.ui_state.time_frame_menu_state.read().active {
+            let mut time_frame_menu_state = app.ui_state.time_frame_menu_state.write();
+            time_frame_menu_state.clear_selection()?;
+            time_frame_menu_state.select(app.ui_state.time_frame)?;
         }
     }
 

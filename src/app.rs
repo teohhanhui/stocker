@@ -1,20 +1,21 @@
-use crate::stock::Stock;
-use anyhow::Context;
+use crate::{stock::Stock, widgets::SelectMenuState};
 use chrono::{DateTime, Duration, Utc};
+use derive_more::{Display, From, FromStr, Into};
 use im::{ordmap, ordmap::OrdMap};
 use math::round;
-use parking_lot::{RwLock, RwLockWriteGuard};
-use std::cmp::Ordering;
-use std::fmt;
-use std::str::FromStr;
-use std::sync::atomic::{self, AtomicU16};
+use parking_lot::RwLock;
+use shrinkwraprs::Shrinkwrap;
+use std::{
+    cmp::Ordering,
+    fmt,
+    num::ParseIntError,
+    str::FromStr,
+    sync::atomic::{self, AtomicU16},
+};
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use thiserror::Error;
-use tui::{
-    layout::{Margin, Rect},
-    widgets::ListState,
-};
+use tui::layout::{Margin, Rect};
 use yahoo_finance::Interval;
 
 pub struct App {
@@ -46,11 +47,13 @@ pub struct UiState {
     debug_draw: bool,
     pub end_date: Option<DateTime<Utc>>,
     pub frame_rate_counter: FrameRateCounter,
+    pub indicator: Option<Indicator>,
+    pub indicator_menu_state: RwLock<SelectMenuState<Indicator>>,
     pub start_date: Option<DateTime<Utc>>,
     pub stock_symbol_input_state: InputState,
     target_areas: RwLock<OrdMap<UiTarget, Rect>>,
     pub time_frame: TimeFrame,
-    pub time_frame_menu_state: MenuState<TimeFrame>,
+    pub time_frame_menu_state: RwLock<SelectMenuState<TimeFrame>>,
 }
 
 impl UiState {
@@ -109,6 +112,24 @@ impl UiState {
         Ok(())
     }
 
+    pub fn set_indicator(&mut self, indicator: Indicator) -> anyhow::Result<()> {
+        self.indicator = Some(indicator);
+        let mut indicator_menu_state = self.indicator_menu_state.write();
+        indicator_menu_state.clear_selection()?;
+        indicator_menu_state.select(indicator).ok();
+
+        Ok(())
+    }
+
+    pub fn clear_indicator(&mut self) -> anyhow::Result<()> {
+        self.indicator = None;
+        let mut indicator_menu_state = self.indicator_menu_state.write();
+        indicator_menu_state.clear_selection()?;
+        indicator_menu_state.select_nth(0)?;
+
+        Ok(())
+    }
+
     pub fn input_cursor(
         &self,
         input_state: &InputState,
@@ -130,7 +151,7 @@ impl UiState {
 
     pub fn menu_index<T>(
         &self,
-        menu_state: &MenuState<T>,
+        menu_state: &SelectMenuState<T>,
         menu_area: Rect,
         x: u16,
         y: u16,
@@ -153,8 +174,14 @@ impl UiState {
                 todo!("not sure how to select an item from scrollable list");
             }
             let n: usize = (y - inner_area.top()) as usize;
+            let l = menu_state.items.len();
+            let l = if menu_state.allow_empty_selection {
+                l + 1
+            } else {
+                l
+            };
 
-            if n < menu_state.items.len() {
+            if n < l {
                 return Some(n);
             }
         }
@@ -187,7 +214,7 @@ impl UiState {
 
     pub fn set_time_frame(&mut self, time_frame: TimeFrame) -> anyhow::Result<()> {
         self.time_frame = time_frame;
-        self.time_frame_menu_state.select(time_frame)?;
+        self.time_frame_menu_state.write().select(time_frame)?;
 
         self.clear_date_range()?;
 
@@ -197,111 +224,27 @@ impl UiState {
 
 impl Default for UiState {
     fn default() -> Self {
-        const DEFAULT_TIME_FRAME: TimeFrame = TimeFrame::OneMonth;
-
         Self {
             debug_draw: false,
             end_date: None,
+            indicator: None,
+            indicator_menu_state: RwLock::new({
+                let mut menu_state = SelectMenuState::new(Indicator::iter());
+                menu_state.allow_empty_selection = true;
+                menu_state.select_nth(0).unwrap();
+                menu_state
+            }),
             frame_rate_counter: FrameRateCounter::new(Duration::milliseconds(1_000)),
             start_date: None,
             stock_symbol_input_state: InputState::default(),
             target_areas: RwLock::new(ordmap! {}),
-            time_frame: DEFAULT_TIME_FRAME,
-            time_frame_menu_state: {
-                let menu_state = MenuState::new(TimeFrame::iter());
-                menu_state.select(DEFAULT_TIME_FRAME).unwrap();
+            time_frame: TimeFrame::default(),
+            time_frame_menu_state: RwLock::new({
+                let mut menu_state = SelectMenuState::new(TimeFrame::iter());
+                menu_state.select(TimeFrame::default()).unwrap();
                 menu_state
-            },
+            }),
         }
-    }
-}
-
-#[derive(Debug)]
-pub struct MenuState<T>
-where
-    T: Clone + PartialEq + ToString,
-{
-    pub active: bool,
-    pub items: Vec<T>,
-    list_state: RwLock<ListState>,
-}
-
-impl<T> MenuState<T>
-where
-    T: Clone + PartialEq + ToString,
-{
-    pub fn new<I>(items: I) -> MenuState<T>
-    where
-        I: IntoIterator<Item = T>,
-    {
-        Self {
-            active: false,
-            items: items.into_iter().collect(),
-            list_state: RwLock::new(ListState::default()),
-        }
-    }
-
-    pub fn selected(&self) -> Option<T> {
-        let selected = self.list_state.read().selected()?;
-
-        Some(self.items[selected].clone())
-    }
-
-    pub fn select(&self, item: T) -> anyhow::Result<()> {
-        let n = self
-            .items
-            .iter()
-            .cloned()
-            .position(|t| t == item)
-            .with_context(|| "item not found")?;
-
-        self.select_nth(n)?;
-
-        Ok(())
-    }
-
-    pub fn select_prev(&self) -> anyhow::Result<()> {
-        let selected = self
-            .list_state
-            .read()
-            .selected()
-            .with_context(|| "cannot select previous item when nothing is selected")?;
-
-        if selected > 0 {
-            self.select_nth(selected - 1)?;
-        }
-
-        Ok(())
-    }
-
-    pub fn select_next(&self) -> anyhow::Result<()> {
-        let selected = self
-            .list_state
-            .read()
-            .selected()
-            .with_context(|| "cannot select next item when nothing is selected")?;
-
-        if selected < self.items.len() - 1 {
-            self.select_nth(selected + 1)?;
-        }
-
-        Ok(())
-    }
-
-    pub fn select_nth(&self, n: usize) -> anyhow::Result<()> {
-        self.list_state.write().select(Some(n));
-
-        Ok(())
-    }
-
-    pub fn clear_selection(&self) -> anyhow::Result<()> {
-        self.list_state.write().select(None);
-
-        Ok(())
-    }
-
-    pub fn list_state_write(&self) -> RwLockWriteGuard<ListState> {
-        self.list_state.write()
     }
 }
 
@@ -322,21 +265,25 @@ impl Default for InputState {
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum UiTarget {
+    IndicatorBox,
+    IndicatorList,
     StockName,
     StockSymbol,
     StockSymbolInput,
-    TimeFrame,
-    TimeFrameMenu,
+    TimeFrameBox,
+    TimeFrameList,
 }
 
 impl UiTarget {
     pub fn zindex(self) -> i8 {
         match self {
+            Self::IndicatorBox => 0,
+            Self::IndicatorList => 1,
             Self::StockName => 0,
             Self::StockSymbol => 0,
             Self::StockSymbolInput => 1,
-            Self::TimeFrame => 0,
-            Self::TimeFrameMenu => 1,
+            Self::TimeFrameBox => 0,
+            Self::TimeFrameList => 1,
         }
     }
 }
@@ -409,6 +356,83 @@ impl FrameRateCounter {
 }
 
 #[derive(Clone, Copy, Debug, EnumIter, Eq, PartialEq)]
+pub enum Indicator {
+    BollingerBands,
+    ExponentialMovingAverage(Period),
+    // MovingAverageConvergenceDivergence,
+    // RelativeStrengthIndex,
+    SimpleMovingAverage(Period),
+}
+
+#[derive(
+    Clone, Copy, Debug, Display, Eq, From, FromStr, Into, Ord, PartialEq, PartialOrd, Shrinkwrap,
+)]
+pub struct Period(u16);
+
+impl Default for Period {
+    fn default() -> Self {
+        Period(50)
+    }
+}
+
+impl FromStr for Indicator {
+    type Err = ParseIndicatorError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "BB" => Ok(Self::BollingerBands),
+            s if s.starts_with("EMA") => {
+                let period = &s[3..];
+                let period = period.parse().map_err(|err| ParseIndicatorError::Parse {
+                    period: period.to_owned(),
+                    source: err,
+                })?;
+
+                Ok(Self::ExponentialMovingAverage(period))
+            }
+            // "MACD" => Ok(Self::MovingAverageConvergenceDivergence),
+            // "RSI" => Ok(Self::RelativeStrengthIndex),
+            s if s.starts_with("SMA") => {
+                let period = &s[3..];
+                let period = period.parse().map_err(|err| ParseIndicatorError::Parse {
+                    period: period.to_owned(),
+                    source: err,
+                })?;
+
+                Ok(Self::SimpleMovingAverage(period))
+            }
+            "" => Err(ParseIndicatorError::Empty),
+            _ => Err(ParseIndicatorError::Invalid),
+        }
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum ParseIndicatorError {
+    #[error("cannot parse indicator from empty string")]
+    Empty,
+    #[error("invalid indicator literal")]
+    Invalid,
+    #[error("invalid indicator period: {}", .period)]
+    Parse {
+        period: String,
+        source: ParseIntError,
+    },
+}
+
+impl fmt::Display for Indicator {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::BollingerBands => write!(f, "Bollinger Bands"),
+            Self::ExponentialMovingAverage(period) => write!(f, "EMA{}", period),
+            // Self::MovingAverageConvergenceDivergence => write!(f, "MACD"),
+            // Self::RelativeStrengthIndex => write!(f, "RSI"),
+            Self::SimpleMovingAverage(period) => write!(f, "SMA{}", period),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, EnumIter, Eq, PartialEq)]
 pub enum TimeFrame {
     FiveDays,
     OneMonth,
@@ -453,6 +477,12 @@ impl TimeFrame {
     }
 }
 
+impl Default for TimeFrame {
+    fn default() -> Self {
+        Self::OneMonth
+    }
+}
+
 impl FromStr for TimeFrame {
     type Err = ParseTimeFrameError;
 
@@ -467,7 +497,7 @@ impl FromStr for TimeFrame {
             "2Y" | "2y" => Ok(Self::TwoYears),
             "5Y" | "5y" => Ok(Self::FiveYears),
             "10Y" | "10y" => Ok(Self::TenYears),
-            "MAX" | "max" => Ok(Self::Max),
+            "Max" | "max" => Ok(Self::Max),
             "" => Err(ParseTimeFrameError::Empty),
             _ => Err(ParseTimeFrameError::Invalid),
         }
@@ -494,7 +524,7 @@ impl fmt::Display for TimeFrame {
             Self::TwoYears => write!(f, "2Y"),
             Self::FiveYears => write!(f, "5Y"),
             Self::TenYears => write!(f, "10Y"),
-            Self::Max => write!(f, "MAX"),
+            Self::Max => write!(f, "Max"),
         }
     }
 }
