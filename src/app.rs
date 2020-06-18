@@ -24,231 +24,231 @@ pub struct App {
 }
 
 impl App {
-    pub async fn load_stock(&mut self, symbol: &str) -> anyhow::Result<()> {
-        self.stock.symbol = symbol.to_ascii_uppercase();
+    // pub async fn load_stock(&mut self, symbol: &str) -> anyhow::Result<()> {
+    //     self.stock.symbol = symbol.to_ascii_uppercase();
 
-        self.ui_state.clear_date_range()?;
+    //     self.ui_state.clear_date_range()?;
 
-        self.stock.load_profile().await?;
-        self.stock
-            .load_historical_prices(
-                self.ui_state.time_frame,
-                self.ui_state.start_date,
-                self.ui_state.end_date,
-            )
-            .await?;
+    //     self.stock.load_profile().await?;
+    //     self.stock
+    //         .load_historical_prices(
+    //             self.ui_state.time_frame,
+    //             self.ui_state.start_date,
+    //             self.ui_state.end_date,
+    //         )
+    //         .await?;
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 }
 
 #[derive(Debug)]
 pub struct UiState {
-    debug_draw: bool,
-    pub end_date: Option<DateTime<Utc>>,
-    pub frame_rate_counter: FrameRateCounter,
-    pub indicator: Option<Indicator>,
-    pub indicator_menu_state: RwLock<SelectMenuState<Indicator>>,
-    pub start_date: Option<DateTime<Utc>>,
+    // debug_draw: bool,
+    // pub end_date: Option<DateTime<Utc>>,
+    // pub frame_rate_counter: FrameRateCounter,
+    // pub indicator: Option<Indicator>,
+    // pub indicator_menu_state: RwLock<SelectMenuState<Indicator>>,
+    // pub start_date: Option<DateTime<Utc>>,
     pub stock_symbol_input_state: InputState,
-    target_areas: RwLock<OrdMap<UiTarget, Rect>>,
-    pub time_frame: TimeFrame,
-    pub time_frame_menu_state: RwLock<SelectMenuState<TimeFrame>>,
+    // target_areas: RwLock<OrdMap<UiTarget, Rect>>,
+    // pub time_frame: TimeFrame,
+    // pub time_frame_menu_state: RwLock<SelectMenuState<TimeFrame>>,
 }
 
 impl UiState {
-    pub fn debug_draw(&self) -> bool {
-        self.debug_draw
-    }
+    // pub fn debug_draw(&self) -> bool {
+    //     self.debug_draw
+    // }
 
-    pub fn set_debug_draw(&mut self, debug_draw: bool) -> anyhow::Result<()> {
-        self.debug_draw = debug_draw;
+    // pub fn set_debug_draw(&mut self, debug_draw: bool) -> anyhow::Result<()> {
+    //     self.debug_draw = debug_draw;
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
-    pub fn shift_date_range_before(&mut self, dt: DateTime<Utc>) -> anyhow::Result<()> {
-        let time_frame_duration = self
-            .time_frame
-            .duration()
-            .expect("time frame has no duration");
+    // pub fn shift_date_range_before(&mut self, dt: DateTime<Utc>) -> anyhow::Result<()> {
+    //     let time_frame_duration = self
+    //         .time_frame
+    //         .duration()
+    //         .expect("time frame has no duration");
 
-        let end_date = (dt - Duration::days(1)).date().and_hms(23, 59, 59);
-        let start_date = (end_date - time_frame_duration + Duration::days(1))
-            .date()
-            .and_hms(0, 0, 0);
+    //     let end_date = (dt - Duration::days(1)).date().and_hms(23, 59, 59);
+    //     let start_date = (end_date - time_frame_duration + Duration::days(1))
+    //         .date()
+    //         .and_hms(0, 0, 0);
 
-        self.start_date = Some(start_date);
-        self.end_date = Some(end_date);
+    //     self.start_date = Some(start_date);
+    //     self.end_date = Some(end_date);
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
-    pub fn shift_date_range_after(&mut self, dt: DateTime<Utc>) -> anyhow::Result<()> {
-        let time_frame_duration = self
-            .time_frame
-            .duration()
-            .expect("time frame has no duration");
+    // pub fn shift_date_range_after(&mut self, dt: DateTime<Utc>) -> anyhow::Result<()> {
+    //     let time_frame_duration = self
+    //         .time_frame
+    //         .duration()
+    //         .expect("time frame has no duration");
 
-        let start_date = (dt + Duration::days(1)).date().and_hms(0, 0, 0);
-        let end_date = (start_date + time_frame_duration - Duration::days(1))
-            .date()
-            .and_hms(23, 59, 59);
+    //     let start_date = (dt + Duration::days(1)).date().and_hms(0, 0, 0);
+    //     let end_date = (start_date + time_frame_duration - Duration::days(1))
+    //         .date()
+    //         .and_hms(23, 59, 59);
 
-        self.start_date = Some(start_date);
-        self.end_date = Some(end_date);
+    //     self.start_date = Some(start_date);
+    //     self.end_date = Some(end_date);
 
-        if end_date > Utc::now() {
-            self.clear_date_range()?;
-        }
+    //     if end_date > Utc::now() {
+    //         self.clear_date_range()?;
+    //     }
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
-    pub fn clear_date_range(&mut self) -> anyhow::Result<()> {
-        self.start_date = None;
-        self.end_date = None;
+    // pub fn clear_date_range(&mut self) -> anyhow::Result<()> {
+    //     self.start_date = None;
+    //     self.end_date = None;
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
-    pub fn set_indicator(&mut self, indicator: Indicator) -> anyhow::Result<()> {
-        self.indicator = Some(indicator);
-        let mut indicator_menu_state = self.indicator_menu_state.write();
-        indicator_menu_state.clear_selection()?;
-        indicator_menu_state.select(indicator).ok();
+    // pub fn set_indicator(&mut self, indicator: Indicator) -> anyhow::Result<()> {
+    //     self.indicator = Some(indicator);
+    //     let mut indicator_menu_state = self.indicator_menu_state.write();
+    //     indicator_menu_state.clear_selection()?;
+    //     indicator_menu_state.select(indicator).ok();
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
-    pub fn clear_indicator(&mut self) -> anyhow::Result<()> {
-        self.indicator = None;
-        let mut indicator_menu_state = self.indicator_menu_state.write();
-        indicator_menu_state.clear_selection()?;
-        indicator_menu_state.select_nth(0)?;
+    // pub fn clear_indicator(&mut self) -> anyhow::Result<()> {
+    //     self.indicator = None;
+    //     let mut indicator_menu_state = self.indicator_menu_state.write();
+    //     indicator_menu_state.clear_selection()?;
+    //     indicator_menu_state.select_nth(0)?;
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
-    pub fn input_cursor(
-        &self,
-        input_state: &InputState,
-        input_target: UiTarget,
-    ) -> Option<(u16, u16)> {
-        let target_areas = self.target_areas.read();
-        let input_area = target_areas.get(&input_target)?;
-        let border_margin = Margin {
-            horizontal: 1,
-            vertical: 1,
-        };
-        let inner_area = input_area.inner(&border_margin);
+    // pub fn input_cursor(
+    //     &self,
+    //     input_state: &InputState,
+    //     input_target: UiTarget,
+    // ) -> Option<(u16, u16)> {
+    //     let target_areas = self.target_areas.read();
+    //     let input_area = target_areas.get(&input_target)?;
+    //     let border_margin = Margin {
+    //         horizontal: 1,
+    //         vertical: 1,
+    //     };
+    //     let inner_area = input_area.inner(&border_margin);
 
-        let cx = inner_area.left() + input_state.value.chars().count() as u16;
-        let cy = inner_area.top();
+    //     let cx = inner_area.left() + input_state.value.chars().count() as u16;
+    //     let cy = inner_area.top();
 
-        Some((cx, cy))
-    }
+    //     Some((cx, cy))
+    // }
 
-    pub fn menu_index<T>(
-        &self,
-        menu_state: &SelectMenuState<T>,
-        menu_area: Rect,
-        x: u16,
-        y: u16,
-    ) -> Option<usize>
-    where
-        T: Clone + PartialEq + ToString,
-    {
-        let border_margin = Margin {
-            horizontal: 1,
-            vertical: 1,
-        };
-        let inner_area = menu_area.inner(&border_margin);
+    // pub fn menu_index<T>(
+    //     &self,
+    //     menu_state: &SelectMenuState<T>,
+    //     menu_area: Rect,
+    //     x: u16,
+    //     y: u16,
+    // ) -> Option<usize>
+    // where
+    //     T: Clone + PartialEq + ToString,
+    // {
+    //     let border_margin = Margin {
+    //         horizontal: 1,
+    //         vertical: 1,
+    //     };
+    //     let inner_area = menu_area.inner(&border_margin);
 
-        if inner_area.left() <= x
-            && inner_area.right() >= x
-            && inner_area.top() <= y
-            && inner_area.bottom() >= y
-        {
-            if (inner_area.height as usize) < menu_state.items.len() {
-                todo!("not sure how to select an item from scrollable list");
-            }
-            let n: usize = (y - inner_area.top()) as usize;
-            let l = menu_state.items.len();
-            let l = if menu_state.allow_empty_selection {
-                l + 1
-            } else {
-                l
-            };
+    //     if inner_area.left() <= x
+    //         && inner_area.right() >= x
+    //         && inner_area.top() <= y
+    //         && inner_area.bottom() >= y
+    //     {
+    //         if (inner_area.height as usize) < menu_state.items.len() {
+    //             todo!("not sure how to select an item from scrollable list");
+    //         }
+    //         let n: usize = (y - inner_area.top()) as usize;
+    //         let l = menu_state.items.len();
+    //         let l = if menu_state.allow_empty_selection {
+    //             l + 1
+    //         } else {
+    //             l
+    //         };
 
-            if n < l {
-                return Some(n);
-            }
-        }
+    //         if n < l {
+    //             return Some(n);
+    //         }
+    //     }
 
-        None
-    }
+    //     None
+    // }
 
-    pub fn target_area(&self, x: u16, y: u16) -> Option<(UiTarget, Rect)> {
-        self.target_areas
-            .read()
-            .clone()
-            .into_iter()
-            .rev()
-            .find(|(_, area)| {
-                area.left() <= x && area.right() >= x && area.top() <= y && area.bottom() >= y
-            })
-    }
+    // pub fn target_area(&self, x: u16, y: u16) -> Option<(UiTarget, Rect)> {
+    //     self.target_areas
+    //         .read()
+    //         .clone()
+    //         .into_iter()
+    //         .rev()
+    //         .find(|(_, area)| {
+    //             area.left() <= x && area.right() >= x && area.top() <= y && area.bottom() >= y
+    //         })
+    // }
 
-    pub fn set_target_area(&self, target: UiTarget, area: Rect) -> anyhow::Result<()> {
-        self.target_areas.write().insert(target, area);
+    // pub fn set_target_area(&self, target: UiTarget, area: Rect) -> anyhow::Result<()> {
+    //     self.target_areas.write().insert(target, area);
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
-    pub fn clear_target_areas(&self) -> anyhow::Result<()> {
-        self.target_areas.write().clear();
+    // pub fn clear_target_areas(&self) -> anyhow::Result<()> {
+    //     self.target_areas.write().clear();
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 
-    pub fn set_time_frame(&mut self, time_frame: TimeFrame) -> anyhow::Result<()> {
-        self.time_frame = time_frame;
-        self.time_frame_menu_state.write().select(time_frame)?;
+    // pub fn set_time_frame(&mut self, time_frame: TimeFrame) -> anyhow::Result<()> {
+    //     self.time_frame = time_frame;
+    //     self.time_frame_menu_state.write().select(time_frame)?;
 
-        self.clear_date_range()?;
+    //     self.clear_date_range()?;
 
-        Ok(())
-    }
+    //     Ok(())
+    // }
 }
 
-impl Default for UiState {
-    fn default() -> Self {
-        Self {
-            debug_draw: false,
-            end_date: None,
-            indicator: None,
-            indicator_menu_state: RwLock::new({
-                let mut menu_state = SelectMenuState::new(Indicator::iter());
-                menu_state.allow_empty_selection = true;
-                menu_state.select_nth(0).unwrap();
-                menu_state
-            }),
-            frame_rate_counter: FrameRateCounter::new(Duration::milliseconds(1_000)),
-            start_date: None,
-            stock_symbol_input_state: InputState::default(),
-            target_areas: RwLock::new(ordmap! {}),
-            time_frame: TimeFrame::default(),
-            time_frame_menu_state: RwLock::new({
-                let mut menu_state = SelectMenuState::new(TimeFrame::iter());
-                menu_state.select(TimeFrame::default()).unwrap();
-                menu_state
-            }),
-        }
-    }
-}
+// impl Default for UiState {
+//     fn default() -> Self {
+//         Self {
+//             debug_draw: false,
+//             end_date: None,
+//             indicator: None,
+//             indicator_menu_state: RwLock::new({
+//                 let mut menu_state = SelectMenuState::new(Indicator::iter());
+//                 menu_state.allow_empty_selection = true;
+//                 menu_state.select_nth(0).unwrap();
+//                 menu_state
+//             }),
+//             frame_rate_counter: FrameRateCounter::new(Duration::milliseconds(1_000)),
+//             start_date: None,
+//             stock_symbol_input_state: InputState::default(),
+//             target_areas: RwLock::new(ordmap! {}),
+//             time_frame: TimeFrame::default(),
+//             time_frame_menu_state: RwLock::new({
+//                 let mut menu_state = SelectMenuState::new(TimeFrame::iter());
+//                 menu_state.select(TimeFrame::default()).unwrap();
+//                 menu_state
+//             }),
+//         }
+//     }
+// }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct InputState {
     pub active: bool,
     pub value: String,

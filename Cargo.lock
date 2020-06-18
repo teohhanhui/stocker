@@ -856,6 +856,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mach"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "86dd2487cdfea56def77b88438a2c915fb45113c5319bfe7e14306ca4cd0b0e1"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "market-finance"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1308,6 +1317,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "reactive-rs"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dee41fe079cafa6f6d12316ce44a1530aebcfb21b58e0face916dcbf19d47eab"
+dependencies = [
+ "slice-deque",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.1.56"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1540,6 +1558,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c111b5bd5695e56cffe5129854aa230b39c93a305372fdbb2668ca2394eea9f8"
 
 [[package]]
+name = "slice-deque"
+version = "0.1.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d39fca478d10e201944a8e21f4393d6bfe38fa3b16a152050e4d097fe2bbf494"
+dependencies = [
+ "libc",
+ "mach",
+ "winapi 0.3.8",
+]
+
+[[package]]
 name = "smallvec"
 version = "1.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1636,6 +1665,7 @@ dependencies = [
  "itertools-num",
  "libmath",
  "parking_lot",
+ "reactive-rs",
  "shrinkwraprs",
  "smol",
  "smol-potat",
