@@ -58,7 +58,7 @@ fn draw_header<B: Backend>(
         .horizontal_margin(1)
         .constraints(vec![
             Constraint::Length(10),
-            Constraint::Length(stock_name.chars().count() as u16),
+            Constraint::Length(cmp::max(stock_name.chars().count() as u16, 20)),
             Constraint::Min(0),
         ])
         .split(area);
@@ -76,7 +76,9 @@ fn draw_header<B: Backend>(
         .style(header_base_style.clone().modifier(Modifier::BOLD));
     f.render_widget(stock_symbol_paragraph, stock_symbol_area);
 
-    // ui_state.set_target_area(UiTarget::StockSymbol, stock_symbol_area)?;
+    ui_state
+        .mouse_target_areas
+        .send((UiTarget::StockSymbol, stock_symbol_area));
 
     let stock_name_texts = vec![Text::raw(stock_name)];
     let stock_name_paragraph = Paragraph::new(stock_name_texts.iter())
@@ -84,7 +86,9 @@ fn draw_header<B: Backend>(
         .style(header_base_style);
     f.render_widget(stock_name_paragraph, stock_name_area);
 
-    // ui_state.set_target_area(UiTarget::StockName, stock_name_area)?;
+    ui_state
+        .mouse_target_areas
+        .send((UiTarget::StockName, stock_name_area));
 
     Ok(())
 }
@@ -415,7 +419,9 @@ fn draw_overlay<B: Backend>(f: &mut Frame<B>, App { ui_state, .. }: &App) -> any
         f.render_widget(Clear, stock_symbol_input_area);
         f.render_widget(stock_symbol_input_paragraph, stock_symbol_input_area);
 
-        // ui_state.set_target_area(UiTarget::StockSymbolInput, stock_symbol_input_area)?;
+        ui_state
+            .mouse_target_areas
+            .send((UiTarget::StockSymbolInput, stock_symbol_input_area));
     }
 
     // if ui_state.indicator_menu_state.read().active {

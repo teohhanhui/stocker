@@ -1,5 +1,5 @@
 use crate::{app::InputState, reactive::StreamExt};
-use crossterm::event::{KeyCode, KeyEvent, MouseEvent};
+use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent};
 use futures::executor;
 use reactive_rs::Stream;
 use yahoo_finance::Profile;
@@ -19,19 +19,25 @@ pub enum TextFieldEvent {
     Modify(String),
 }
 
-pub fn input_events_to_text_field_events<'a, S, F, C>(
+pub fn input_events_to_text_field_events<'a, S, M, F, H, C>(
     input_events: S,
     activation_key_code: KeyCode,
+    mouse_hit_funcs: M,
     mut map_value_func: F,
 ) -> impl Stream<'a, Item = TextFieldEvent, Context = C>
 where
     S: Stream<'a, Item = InputEvent, Context = C>,
+    M: Stream<'a, Item = H>,
     F: 'a + FnMut(String) -> String,
+    H: 'a + Clone + FnOnce(bool, (u16, u16)) -> bool,
 {
     input_events
+        .with_latest_from(mouse_hit_funcs, |(ev, mouse_hit_func)| {
+            (*ev, mouse_hit_func.clone())
+        })
         .fold(
             (InputState::default(), None),
-            move |(acc_input_state, _), ev| match ev {
+            move |(acc_input_state, _), (ev, mouse_hit_func)| match ev {
                 InputEvent::Key(KeyEvent { code, .. }) => match code {
                     KeyCode::Backspace if acc_input_state.active => {
                         let mut value = acc_input_state.value.clone();
@@ -79,6 +85,23 @@ where
                     }
                     _ => (acc_input_state.clone(), None),
                 },
+                InputEvent::Mouse(MouseEvent::Up(MouseButton::Left, x, y, _)) => {
+                    let mouse_hit_func = mouse_hit_func.clone();
+                    let active = mouse_hit_func(acc_input_state.active, (*x, *y));
+                    if acc_input_state.active && !active {
+                        (InputState::default(), Some(TextFieldEvent::Cancel))
+                    } else if !acc_input_state.active && active {
+                        (
+                            InputState {
+                                active: true,
+                                value: acc_input_state.value.clone(),
+                            },
+                            Some(TextFieldEvent::Activate),
+                        )
+                    } else {
+                        (acc_input_state.clone(), None)
+                    }
+                }
                 _ => (acc_input_state.clone(), None),
             },
         )
@@ -134,7 +157,7 @@ where
     {
         self.stock_symbols.subscribe_ctx(move |ctx, symbol| {
             let profile =
-                executor::block_on(Profile::load(symbol.as_str())).expect("Profile load failed");
+                executor::block_on(Profile::load(symbol.as_str())).expect("profile load failed");
 
             observer(ctx, &profile);
         });

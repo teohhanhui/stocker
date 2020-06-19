@@ -1,12 +1,11 @@
 use crate::{stock::Stock, widgets::SelectMenuState};
 use chrono::{DateTime, Duration, Utc};
 use derive_more::{Display, From, FromStr, Into};
-use im::{ordmap, ordmap::OrdMap};
 use math::round;
 use parking_lot::RwLock;
+use reactive_rs::Broadcast;
 use shrinkwraprs::Shrinkwrap;
 use std::{
-    cmp::Ordering,
     fmt,
     num::ParseIntError,
     str::FromStr,
@@ -18,12 +17,12 @@ use thiserror::Error;
 use tui::layout::{Margin, Rect};
 use yahoo_finance::Interval;
 
-pub struct App {
+pub struct App<'r> {
     pub stock: Stock,
-    pub ui_state: UiState,
+    pub ui_state: UiState<'r>,
 }
 
-impl App {
+impl<'r> App<'r> {
     // pub async fn load_stock(&mut self, symbol: &str) -> anyhow::Result<()> {
     //     self.stock.symbol = symbol.to_ascii_uppercase();
 
@@ -42,21 +41,21 @@ impl App {
     // }
 }
 
-#[derive(Debug)]
-pub struct UiState {
+// #[derive(Debug)]
+pub struct UiState<'r> {
     // debug_draw: bool,
     // pub end_date: Option<DateTime<Utc>>,
     // pub frame_rate_counter: FrameRateCounter,
     // pub indicator: Option<Indicator>,
     // pub indicator_menu_state: RwLock<SelectMenuState<Indicator>>,
+    pub mouse_target_areas: Broadcast<'r, (), (UiTarget, Rect)>,
     // pub start_date: Option<DateTime<Utc>>,
     pub stock_symbol_input_state: InputState,
-    // target_areas: RwLock<OrdMap<UiTarget, Rect>>,
     // pub time_frame: TimeFrame,
     // pub time_frame_menu_state: RwLock<SelectMenuState<TimeFrame>>,
 }
 
-impl UiState {
+impl<'r> UiState<'r> {
     // pub fn debug_draw(&self) -> bool {
     //     self.debug_draw
     // }
@@ -189,29 +188,6 @@ impl UiState {
     //     None
     // }
 
-    // pub fn target_area(&self, x: u16, y: u16) -> Option<(UiTarget, Rect)> {
-    //     self.target_areas
-    //         .read()
-    //         .clone()
-    //         .into_iter()
-    //         .rev()
-    //         .find(|(_, area)| {
-    //             area.left() <= x && area.right() >= x && area.top() <= y && area.bottom() >= y
-    //         })
-    // }
-
-    // pub fn set_target_area(&self, target: UiTarget, area: Rect) -> anyhow::Result<()> {
-    //     self.target_areas.write().insert(target, area);
-
-    //     Ok(())
-    // }
-
-    // pub fn clear_target_areas(&self) -> anyhow::Result<()> {
-    //     self.target_areas.write().clear();
-
-    //     Ok(())
-    // }
-
     // pub fn set_time_frame(&mut self, time_frame: TimeFrame) -> anyhow::Result<()> {
     //     self.time_frame = time_frame;
     //     self.time_frame_menu_state.write().select(time_frame)?;
@@ -222,31 +198,31 @@ impl UiState {
     // }
 }
 
-// impl Default for UiState {
-//     fn default() -> Self {
-//         Self {
-//             debug_draw: false,
-//             end_date: None,
-//             indicator: None,
-//             indicator_menu_state: RwLock::new({
-//                 let mut menu_state = SelectMenuState::new(Indicator::iter());
-//                 menu_state.allow_empty_selection = true;
-//                 menu_state.select_nth(0).unwrap();
-//                 menu_state
-//             }),
-//             frame_rate_counter: FrameRateCounter::new(Duration::milliseconds(1_000)),
-//             start_date: None,
-//             stock_symbol_input_state: InputState::default(),
-//             target_areas: RwLock::new(ordmap! {}),
-//             time_frame: TimeFrame::default(),
-//             time_frame_menu_state: RwLock::new({
-//                 let mut menu_state = SelectMenuState::new(TimeFrame::iter());
-//                 menu_state.select(TimeFrame::default()).unwrap();
-//                 menu_state
-//             }),
-//         }
-//     }
-// }
+impl<'r> Default for UiState<'r> {
+    fn default() -> Self {
+        Self {
+            // debug_draw: false,
+            // end_date: None,
+            // frame_rate_counter: FrameRateCounter::new(Duration::milliseconds(1_000)),
+            // indicator: None,
+            // indicator_menu_state: RwLock::new({
+            //     let mut menu_state = SelectMenuState::new(Indicator::iter());
+            //     menu_state.allow_empty_selection = true;
+            //     menu_state.select_nth(0).unwrap();
+            //     menu_state
+            // }),
+            mouse_target_areas: Broadcast::new(),
+            // start_date: None,
+            stock_symbol_input_state: InputState::default(),
+            // time_frame: TimeFrame::default(),
+            // time_frame_menu_state: RwLock::new({
+            //     let mut menu_state = SelectMenuState::new(TimeFrame::iter());
+            //     menu_state.select(TimeFrame::default()).unwrap();
+            //     menu_state
+            // }),
+        }
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct InputState {
@@ -272,37 +248,6 @@ pub enum UiTarget {
     StockSymbolInput,
     TimeFrameBox,
     TimeFrameList,
-}
-
-impl UiTarget {
-    pub fn zindex(self) -> i8 {
-        match self {
-            Self::IndicatorBox => 0,
-            Self::IndicatorList => 1,
-            Self::StockName => 0,
-            Self::StockSymbol => 0,
-            Self::StockSymbolInput => 1,
-            Self::TimeFrameBox => 0,
-            Self::TimeFrameList => 1,
-        }
-    }
-}
-
-impl Ord for UiTarget {
-    fn cmp(&self, other: &Self) -> Ordering {
-        let ordering = self.zindex().cmp(&other.zindex());
-        if ordering == Ordering::Equal {
-            (*self as isize).cmp(&(*other as isize))
-        } else {
-            ordering
-        }
-    }
-}
-
-impl PartialOrd for UiTarget {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
 }
 
 #[derive(Debug)]

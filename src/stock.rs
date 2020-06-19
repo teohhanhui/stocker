@@ -2,7 +2,7 @@ use crate::app::TimeFrame;
 use chrono::{DateTime, Utc};
 use yahoo_finance::{history, Bar, Profile, Quote};
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Stock {
     pub bars: Vec<Bar>,
     pub profile: Option<Profile>,
