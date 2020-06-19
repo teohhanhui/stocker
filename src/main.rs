@@ -130,30 +130,39 @@ async fn main() -> anyhow::Result<()> {
 
     let should_quit = AtomicBool::new(false);
 
-    let events = SimpleBroadcast::new();
+    let events = SimpleBroadcast::new()
+        .start_with(InputEvent::Tick)
+        .broadcast();
 
     let stock_symbol_text_field_events =
-        event::create_text_field_event_stream(events.clone(), KeyCode::Char('s'), |mut v| {
+        event::create_text_field_event_stream(events.clone(), KeyCode::Char('s'), |v| {
             v.to_ascii_uppercase()
         })
         .broadcast();
 
     let stock_symbols = stock_symbol_text_field_events
         .clone()
-        .fold(args.symbol, |acc_symbol, (_input_state, ev)| {
+        .fold(args.symbol.clone(), |acc_symbol, (_input_state, ev)| {
             if let Some(TextFieldEvent::Accept(symbol)) = ev {
                 symbol.clone()
             } else {
                 acc_symbol.clone()
             }
         })
+        .start_with(args.symbol.clone())
+        .broadcast();
+
+    let stock_symbol_input_states = stock_symbol_text_field_events
+        .clone()
+        .map(|(input_state, ..)| input_state.clone())
+        .start_with(InputState::default())
         .broadcast();
 
     events
         .clone()
         .with_latest_from(
-            stock_symbol_text_field_events.clone(),
-            |(ev, (stock_symbol_input_state, ..))| (*ev, stock_symbol_input_state.clone()),
+            stock_symbol_input_states.clone(),
+            |(ev, stock_symbol_input_state)| (*ev, stock_symbol_input_state.clone()),
         )
         .with_latest_from(
             stock_symbols.clone(),
@@ -207,6 +216,9 @@ async fn main() -> anyhow::Result<()> {
     let input_tick_stream = tick_stream.map(|()| InputEvent::Tick);
     let mut input_event_stream = input_event_stream.merge(input_tick_stream);
 
+    // hacky hacks
+    stock_symbols.send(args.symbol);
+    stock_symbol_input_states.send(InputState::default());
     events.send(InputEvent::Tick);
 
     while !should_quit.load(AtomicOrdering::Relaxed) {

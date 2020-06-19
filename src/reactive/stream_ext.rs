@@ -15,6 +15,13 @@ pub trait StreamExt<'a>: Stream<'a> {
         }
     }
 
+    fn start_with(self, item: Self::Item) -> StartWith<Self, Self::Item>
+    where
+        Self::Item: 'a + Clone + Sized,
+    {
+        StartWith { item, stream: self }
+    }
+
     fn with_latest_from<U, F, T>(self, other: U, func: F) -> WithLatestFrom<Self, U, NoContext<F>>
     where
         U: Stream<'a>,
@@ -103,6 +110,31 @@ where
                 sink.send((None, Some(b.clone())));
             });
         }
+    }
+}
+
+pub struct StartWith<S, T: Sized> {
+    item: T,
+    stream: S,
+}
+
+impl<'a, S, T, C> Stream<'a> for StartWith<S, T>
+where
+    S: Stream<'a, Item = T, Context = C>,
+    T: 'a + Clone + Sized,
+    C: Default,
+{
+    type Context = C;
+    type Item = T;
+
+    fn subscribe_ctx<O>(self, mut observer: O)
+    where
+        O: 'a + FnMut(&Self::Context, &Self::Item),
+    {
+        observer(&C::default(), &self.item.clone());
+        self.stream.subscribe_ctx(move |ctx, x| {
+            observer(ctx, x);
+        });
     }
 }
 
