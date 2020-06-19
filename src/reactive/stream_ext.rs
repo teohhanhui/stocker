@@ -14,6 +14,20 @@ pub trait StreamExt<'a>: Stream<'a> {
             stream_b: other,
         }
     }
+
+    fn with_latest_from<U, F, T>(self, other: U, func: F) -> WithLatestFrom<Self, U, NoContext<F>>
+    where
+        U: Stream<'a>,
+        F: 'a + FnMut(&(Self::Item, U::Item)) -> T,
+        Self::Item: 'a + Clone + Sized,
+        U::Item: 'a + Clone + Sized,
+    {
+        WithLatestFrom {
+            func: NoContext(func),
+            stream_a: self,
+            stream_b: other,
+        }
+    }
 }
 
 impl<'a, T> StreamExt<'a> for T where T: Stream<'a> {}
@@ -66,8 +80,72 @@ where
                 },
             )
             .map_both(|(ctx, a, b)| (ctx.clone(), (a.clone(), b.clone())))
-            .filter_ctx(|ctx, (a, b)| ctx.is_some() && a.is_some() && b.is_some())
+            .filter(|(a, b)| a.is_some() && b.is_some())
             .map_both_ctx(|ctx, (a, b)| {
+                (
+                    ctx.clone().unwrap(),
+                    (a.clone().unwrap(), b.clone().unwrap()),
+                )
+            })
+            .map_ctx(move |ctx, x| func.call_mut(ctx, x))
+            .subscribe_ctx(move |ctx, x| {
+                observer(ctx, x);
+            });
+        {
+            let sink = sink.clone();
+            self.stream_a.subscribe_ctx(move |ctx, a| {
+                sink.send_ctx(Some(ctx.clone()), (Some(a.clone()), None));
+            });
+        }
+        {
+            let sink = sink.clone();
+            self.stream_b.subscribe(move |b| {
+                sink.send((None, Some(b.clone())));
+            });
+        }
+    }
+}
+
+pub struct WithLatestFrom<S, U, F> {
+    func: F,
+    stream_a: S,
+    stream_b: U,
+}
+
+impl<'a, S, U, F, A, B, C> Stream<'a> for WithLatestFrom<S, U, F>
+where
+    S: Stream<'a, Item = A, Context = C>,
+    U: Stream<'a, Item = B>,
+    F: 'a + ContextFn<C, (A, B)>,
+    A: 'a + Clone + Sized,
+    B: 'a + Clone + Sized,
+    C: 'a + Clone + Sized,
+{
+    type Context = C;
+    type Item = F::Output;
+
+    fn subscribe_ctx<O>(self, mut observer: O)
+    where
+        O: 'a + FnMut(&Self::Context, &Self::Item),
+    {
+        let mut func = self.func;
+        let sink = Broadcast::new();
+        sink.clone()
+            .fold(
+                (None, None),
+                |(_acc_a, acc_b), (a, b): &(Option<A>, Option<B>)| {
+                    (
+                        a.clone(),
+                        if b.is_some() {
+                            b.clone()
+                        } else {
+                            acc_b.clone()
+                        },
+                    )
+                },
+            )
+            .filter(|(a, b)| a.is_some() && b.is_some())
+            .map_both_ctx(|ctx: &Option<C>, (a, b)| {
                 (
                     ctx.clone().unwrap(),
                     (a.clone().unwrap(), b.clone().unwrap()),

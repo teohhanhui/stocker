@@ -151,11 +151,11 @@ async fn main() -> anyhow::Result<()> {
 
     events
         .clone()
-        .combine_latest(
+        .with_latest_from(
             stock_symbol_text_field_events.clone(),
             |(ev, (stock_symbol_input_state, ..))| (*ev, stock_symbol_input_state.clone()),
         )
-        .combine_latest(
+        .with_latest_from(
             stock_symbols.clone(),
             |((ev, stock_symbol_input_state), stock_symbol)| {
                 (*ev, stock_symbol_input_state.clone(), stock_symbol.clone())
