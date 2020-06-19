@@ -1,4 +1,4 @@
-use crate::app::InputState;
+use crate::{app::InputState, reactive::StreamExt};
 use crossterm::event::{KeyCode, KeyEvent, MouseEvent};
 use reactive_rs::Stream;
 
@@ -17,16 +17,16 @@ pub enum TextFieldEvent {
     Modify(String),
 }
 
-pub fn create_text_field_event_stream<'a, S, F, C>(
-    event_stream: S,
+pub fn input_events_to_text_field_events<'a, S, F, C>(
+    input_events: S,
     activation_key_code: KeyCode,
     mut map_value_func: F,
-) -> impl Stream<'a, Item = (InputState, Option<TextFieldEvent>), Context = C>
+) -> impl Stream<'a, Item = TextFieldEvent, Context = C>
 where
     S: Stream<'a, Item = InputEvent, Context = C>,
     F: 'a + FnMut(String) -> String,
 {
-    event_stream
+    input_events
         .fold(
             (InputState::default(), None),
             move |(acc_input_state, _), ev| match ev {
@@ -80,5 +80,30 @@ where
                 _ => (acc_input_state.clone(), None),
             },
         )
-        .filter(|(_, ev)| ev.is_some())
+        .filter_map(|(_, ev)| ev.clone())
+}
+
+pub fn text_field_events_to_input_states<'a, S, C>(
+    text_field_events: S,
+) -> impl Stream<'a, Item = InputState, Context = C>
+where
+    S: Stream<'a, Item = TextFieldEvent, Context = C>,
+    C: Default,
+{
+    text_field_events
+        .fold(InputState::default(), |_, ev| match ev {
+            TextFieldEvent::Activate => InputState {
+                active: true,
+                value: "".to_owned(),
+            },
+            TextFieldEvent::Modify(value) => InputState {
+                active: true,
+                value: value.clone(),
+            },
+            TextFieldEvent::Accept(_) | TextFieldEvent::Cancel => InputState {
+                active: false,
+                value: "".to_owned(),
+            },
+        })
+        .start_with(InputState::default())
 }

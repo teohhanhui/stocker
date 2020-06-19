@@ -135,15 +135,15 @@ async fn main() -> anyhow::Result<()> {
         .broadcast();
 
     let stock_symbol_text_field_events =
-        event::create_text_field_event_stream(events.clone(), KeyCode::Char('s'), |v| {
+        event::input_events_to_text_field_events(events.clone(), KeyCode::Char('s'), |v| {
             v.to_ascii_uppercase()
         })
         .broadcast();
 
     let stock_symbols = stock_symbol_text_field_events
         .clone()
-        .fold(args.symbol.clone(), |acc_symbol, (_input_state, ev)| {
-            if let Some(TextFieldEvent::Accept(symbol)) = ev {
+        .fold(args.symbol.clone(), |acc_symbol, ev| {
+            if let TextFieldEvent::Accept(symbol) = ev {
                 symbol.clone()
             } else {
                 acc_symbol.clone()
@@ -152,11 +152,9 @@ async fn main() -> anyhow::Result<()> {
         .start_with(args.symbol.clone())
         .broadcast();
 
-    let stock_symbol_input_states = stock_symbol_text_field_events
-        .clone()
-        .map(|(input_state, ..)| input_state.clone())
-        .start_with(InputState::default())
-        .broadcast();
+    let stock_symbol_input_states =
+        event::text_field_events_to_input_states(stock_symbol_text_field_events.clone())
+            .broadcast();
 
     events
         .clone()
