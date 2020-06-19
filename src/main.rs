@@ -150,7 +150,10 @@ async fn main() -> anyhow::Result<()> {
             }
         })
         .start_with(args.symbol.clone())
+        .distinct_until_changed()
         .broadcast();
+
+    let stock_profiles = event::stock_symbols_to_stock_profiles(stock_symbols.clone()).broadcast();
 
     let stock_symbol_input_states =
         event::text_field_events_to_input_states(stock_symbol_text_field_events.clone())
@@ -168,37 +171,50 @@ async fn main() -> anyhow::Result<()> {
                 (*ev, stock_symbol_input_state.clone(), stock_symbol.clone())
             },
         )
-        .subscribe(|(ev, stock_symbol_input_state, stock_symbol)| match ev {
-            InputEvent::Key(KeyEvent { code, .. }) => match code {
-                KeyCode::Char('q') if !stock_symbol_input_state.active => {
-                    should_quit.store(true, AtomicOrdering::Relaxed);
-                }
-                KeyCode::Char(_) if !stock_symbol_input_state.active => {
-                    execute!(terminal.backend_mut(), crossterm::style::Print("\x07"),).unwrap();
+        .with_latest_from(
+            stock_profiles.clone(),
+            |((ev, stock_symbol_input_state, stock_symbol), stock_profile)| {
+                (
+                    *ev,
+                    stock_symbol_input_state.clone(),
+                    stock_symbol.clone(),
+                    stock_profile.clone(),
+                )
+            },
+        )
+        .subscribe(
+            |(ev, stock_symbol_input_state, stock_symbol, stock_profile)| match ev {
+                InputEvent::Key(KeyEvent { code, .. }) => match code {
+                    KeyCode::Char('q') if !stock_symbol_input_state.active => {
+                        should_quit.store(true, AtomicOrdering::Relaxed);
+                    }
+                    KeyCode::Char(_) if !stock_symbol_input_state.active => {
+                        execute!(terminal.backend_mut(), crossterm::style::Print("\x07"),).unwrap();
+                    }
+                    _ => {}
+                },
+                InputEvent::Tick => {
+                    let app = App {
+                        stock: Stock {
+                            bars: vec![],
+                            profile: Some(stock_profile.clone()),
+                            quote: None,
+                            symbol: stock_symbol.clone(),
+                        },
+                        ui_state: UiState {
+                            stock_symbol_input_state: stock_symbol_input_state.clone(),
+                        },
+                    };
+
+                    terminal
+                        .draw(|mut f| {
+                            ui::draw(&mut f, &app).expect("Draw failed");
+                        })
+                        .unwrap();
                 }
                 _ => {}
             },
-            InputEvent::Tick => {
-                let app = App {
-                    stock: Stock {
-                        bars: vec![],
-                        profile: None,
-                        quote: None,
-                        symbol: stock_symbol.clone(),
-                    },
-                    ui_state: UiState {
-                        stock_symbol_input_state: stock_symbol_input_state.clone(),
-                    },
-                };
-
-                terminal
-                    .draw(|mut f| {
-                        ui::draw(&mut f, &app).expect("Draw failed");
-                    })
-                    .unwrap();
-            }
-            _ => {}
-        });
+        );
 
     let input_event_stream = EventStream::new()
         .filter(|e| match e {

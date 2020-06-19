@@ -20,6 +20,7 @@ better-panic = "0.2.0"
 chrono = "0.4.11"
 crossterm = { version = "0.17.5", features = ["event-stream"] }
 derive_more = "0.99.7"
+futures = "0.3.5"
 im = "15.0.0"
 itertools = "0.9.0"
 itertools-num = "0.1.3"

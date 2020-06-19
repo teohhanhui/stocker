@@ -1,6 +1,8 @@
 use crate::{app::InputState, reactive::StreamExt};
 use crossterm::event::{KeyCode, KeyEvent, MouseEvent};
+use futures::executor;
 use reactive_rs::Stream;
+use yahoo_finance::Profile;
 
 #[derive(Clone, Copy, Debug)]
 pub enum InputEvent {
@@ -106,4 +108,35 @@ where
             },
         })
         .start_with(InputState::default())
+}
+
+pub fn stock_symbols_to_stock_profiles<'a, S>(stock_symbols: S) -> StockSymbolToStockProfile<S>
+where
+    S: Stream<'a, Item = String>,
+{
+    StockSymbolToStockProfile { stock_symbols }
+}
+
+pub struct StockSymbolToStockProfile<S> {
+    stock_symbols: S,
+}
+
+impl<'a, S> Stream<'a> for StockSymbolToStockProfile<S>
+where
+    S: Stream<'a, Item = String>,
+{
+    type Context = S::Context;
+    type Item = Profile;
+
+    fn subscribe_ctx<O>(self, mut observer: O)
+    where
+        O: 'a + FnMut(&Self::Context, &Self::Item),
+    {
+        self.stock_symbols.subscribe_ctx(move |ctx, symbol| {
+            let profile =
+                executor::block_on(Profile::load(symbol.as_str())).expect("Profile load failed");
+
+            observer(ctx, &profile);
+        });
+    }
 }

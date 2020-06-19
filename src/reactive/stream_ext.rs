@@ -15,6 +15,13 @@ pub trait StreamExt<'a>: Stream<'a> {
         }
     }
 
+    fn distinct_until_changed(self) -> DistinctUntilChanged<Self>
+    where
+        Self::Item: 'a + Clone + PartialEq + Sized,
+    {
+        DistinctUntilChanged { stream: self }
+    }
+
     fn start_with(self, item: Self::Item) -> StartWith<Self, Self::Item>
     where
         Self::Item: 'a + Clone + Sized,
@@ -113,6 +120,38 @@ where
     }
 }
 
+pub struct DistinctUntilChanged<S> {
+    stream: S,
+}
+
+impl<'a, S, T, C> Stream<'a> for DistinctUntilChanged<S>
+where
+    S: Stream<'a, Item = T, Context = C>,
+    T: 'a + Clone + PartialEq + Sized,
+    C: 'a + Clone + Sized,
+{
+    type Context = C;
+    type Item = T;
+
+    fn subscribe_ctx<O>(self, mut observer: O)
+    where
+        O: 'a + FnMut(&Self::Context, &Self::Item),
+    {
+        let sink = Broadcast::new();
+        sink.clone()
+            .fold((None, false), |(acc_x, _emit), x: &Option<T>| {
+                (x.clone(), x != acc_x)
+            })
+            .filter_map(|(x, emit)| if *emit { x.clone() } else { None })
+            .subscribe_ctx(move |ctx, x| {
+                observer(ctx, x);
+            });
+        self.stream.subscribe_ctx(move |ctx, x| {
+            sink.send_ctx(ctx.clone(), Some(x.clone()));
+        });
+    }
+}
+
 pub struct StartWith<S, T: Sized> {
     item: T,
     stream: S,
@@ -131,7 +170,7 @@ where
     where
         O: 'a + FnMut(&Self::Context, &Self::Item),
     {
-        observer(&C::default(), &self.item.clone());
+        observer(&C::default(), &self.item);
         self.stream.subscribe_ctx(move |ctx, x| {
             observer(ctx, x);
         });

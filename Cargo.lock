@@ -1660,6 +1660,7 @@ dependencies = [
  "chrono",
  "crossterm",
  "derive_more",
+ "futures",
  "im",
  "itertools 0.9.0",
  "itertools-num",
