@@ -142,12 +142,12 @@ where
         sink.clone().subscribe_ctx(move |ctx, x| {
             observer(ctx, &func.call_mut(ctx, x));
         });
-        {
+        self.stream_a.subscribe_ctx({
             let buf_a = buf_a.clone();
             let buf_b = buf_b.clone();
             let buf_ctx = buf_ctx.clone();
             let sink = sink.clone();
-            self.stream_a.subscribe_ctx(move |ctx, a| {
+            move |ctx, a| {
                 if let Some(b) = &*buf_b.borrow() {
                     sink.send_ctx(ctx, &(a.clone(), b.clone()));
                 }
@@ -155,8 +155,8 @@ where
                 buf_a.replace(a.clone());
                 let mut buf_ctx = buf_ctx.borrow_mut();
                 buf_ctx.replace(ctx.clone());
-            });
-        }
+            }
+        });
         self.stream_b.subscribe(move |b| {
             if let Some(a) = &*buf_a.borrow() {
                 let buf_ctx = &*buf_ctx.borrow();
@@ -246,14 +246,14 @@ where
     {
         let buf_b = self.buf_b.clone();
         let mut func = self.func;
-        {
+        self.stream_a.subscribe_ctx({
             let buf_b = buf_b.clone();
-            self.stream_a.subscribe_ctx(move |ctx, a| {
+            move |ctx, a| {
                 if let Some(b) = &*buf_b.borrow() {
                     observer(ctx, &func.call_mut(ctx, &(a.clone(), b.clone())));
                 }
-            });
-        }
+            }
+        });
         self.stream_b.subscribe(move |b| {
             let mut buf_b = buf_b.borrow_mut();
             buf_b.replace(b.clone());

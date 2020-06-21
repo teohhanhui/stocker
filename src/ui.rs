@@ -77,8 +77,8 @@ fn draw_header<B: Backend>(
     f.render_widget(stock_symbol_paragraph, stock_symbol_area);
 
     ui_state
-        .mouse_target_areas
-        .send((UiTarget::StockSymbol, stock_symbol_area));
+        .ui_target_areas
+        .send((UiTarget::StockSymbol, Some(stock_symbol_area)));
 
     let stock_name_texts = vec![Text::raw(stock_name)];
     let stock_name_paragraph = Paragraph::new(stock_name_texts.iter())
@@ -87,8 +87,8 @@ fn draw_header<B: Backend>(
     f.render_widget(stock_name_paragraph, stock_name_area);
 
     ui_state
-        .mouse_target_areas
-        .send((UiTarget::StockName, stock_name_area));
+        .ui_target_areas
+        .send((UiTarget::StockName, Some(stock_name_area)));
 
     Ok(())
 }
@@ -420,8 +420,12 @@ fn draw_overlay<B: Backend>(f: &mut Frame<B>, App { ui_state, .. }: &App) -> any
         f.render_widget(stock_symbol_input_paragraph, stock_symbol_input_area);
 
         ui_state
-            .mouse_target_areas
-            .send((UiTarget::StockSymbolInput, stock_symbol_input_area));
+            .ui_target_areas
+            .send((UiTarget::StockSymbolInput, Some(stock_symbol_input_area)));
+    } else {
+        ui_state
+            .ui_target_areas
+            .send((UiTarget::StockSymbolInput, None));
     }
 
     // if ui_state.indicator_menu_state.read().active {

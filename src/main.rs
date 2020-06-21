@@ -11,6 +11,7 @@ use crossterm::{
     event::{Event, EventStream, KeyCode, KeyEvent, MouseButton, MouseEvent},
     execute, terminal,
 };
+use im::hashmap;
 use reactive_rs::{Broadcast, Stream};
 use std::{
     io::{self, Write},
@@ -127,47 +128,27 @@ async fn main() -> anyhow::Result<()> {
 
     let should_quit = AtomicBool::new(false);
 
-    let mouse_target_areas: Broadcast<(), (UiTarget, Rect)> = Broadcast::new();
+    let ui_target_areas: Broadcast<(), (UiTarget, Option<Rect>)> = Broadcast::new();
 
     let input_events: Broadcast<(), InputEvent> =
         Broadcast::new().start_with(InputEvent::Tick).broadcast();
 
-    let stock_symbol_text_field_mouse_hit_funcs = mouse_target_areas
-        .clone()
-        .filter_map(|(ui_target, area)| {
-            if let UiTarget::StockSymbol | UiTarget::StockName | UiTarget::StockSymbolInput =
-                ui_target
-            {
-                Some((*ui_target, *area))
-            } else {
-                None
-            }
-        })
-        .buffer(3)
-        .map(|mouse_target_areas| {
-            let mouse_target_areas = mouse_target_areas.to_vec();
-            move |active: bool, (x, y): (u16, u16)| {
-                let hit_target = mouse_target_areas
-                    .iter()
-                    .rev()
-                    .find(|(_, area)| {
-                        area.left() <= x && area.right() > x && area.top() <= y && area.bottom() > y
-                    })
-                    .map(|(hit_target, _)| hit_target);
-                match hit_target {
-                    Some(UiTarget::StockSymbol) | Some(UiTarget::StockName) => !active,
-                    Some(UiTarget::StockSymbolInput) => true,
-                    Some(_) => active,
-                    None => false,
-                }
-            }
-        })
+    let stock_symbol_text_field_map_mouse_funcs =
+        event::ui_target_areas_to_text_field_map_mouse_funcs(
+            ui_target_areas.clone(),
+            hashmap! {
+                Some(UiTarget::StockSymbol) => Some(TextFieldEvent::Toggle),
+                Some(UiTarget::StockName) => Some(TextFieldEvent::Toggle),
+                Some(UiTarget::StockSymbolInput) => None,
+                None => Some(TextFieldEvent::Cancel)
+            },
+        )
         .broadcast();
 
     let stock_symbol_text_field_events = event::input_events_to_text_field_events(
         input_events.clone(),
         KeyCode::Char('s'),
-        stock_symbol_text_field_mouse_hit_funcs.clone(),
+        stock_symbol_text_field_map_mouse_funcs.clone(),
         |v| v.to_ascii_uppercase(),
     )
     .broadcast();
@@ -190,73 +171,69 @@ async fn main() -> anyhow::Result<()> {
     let stock_symbol_input_states =
         event::text_field_events_to_input_states(stock_symbol_text_field_events.clone())
             .broadcast();
-    {
-        let terminal = &mut terminal;
-        let should_quit = &should_quit;
-        let mouse_target_areas = mouse_target_areas.clone();
 
-        input_events
-            .clone()
-            .with_latest_from(
-                stock_symbol_input_states.clone(),
-                |(ev, stock_symbol_input_state)| (*ev, stock_symbol_input_state.clone()),
-            )
-            .with_latest_from(
-                stock_symbols.clone(),
-                |((ev, stock_symbol_input_state), stock_symbol)| {
-                    (*ev, stock_symbol_input_state.clone(), stock_symbol.clone())
-                },
-            )
-            .with_latest_from(
-                stock_profiles.clone(),
-                |((ev, stock_symbol_input_state, stock_symbol), stock_profile)| {
-                    (
-                        *ev,
-                        stock_symbol_input_state.clone(),
-                        stock_symbol.clone(),
-                        stock_profile.clone(),
-                    )
-                },
-            )
-            .subscribe(
-                move |(ev, stock_symbol_input_state, stock_symbol, stock_profile)| match ev {
-                    InputEvent::Key(KeyEvent { code, .. }) => match code {
-                        KeyCode::Char('q') if !stock_symbol_input_state.active => {
-                            should_quit.store(true, AtomicOrdering::Relaxed);
-                        }
-                        KeyCode::Char(_) if !stock_symbol_input_state.active => {
-                            execute!(terminal.backend_mut(), crossterm::style::Print("\x07"),)
-                                .unwrap();
-                        }
-                        _ => {}
-                    },
-                    InputEvent::Tick => {
-                        let app = App {
-                            stock: {
-                                let mut stock = Stock::default();
-                                stock.profile = Some(stock_profile.clone());
-                                stock.symbol = stock_symbol.clone();
-                                stock
-                            },
-                            ui_state: {
-                                let mut ui_state = UiState::default();
-                                ui_state.mouse_target_areas = mouse_target_areas.clone();
-                                ui_state.stock_symbol_input_state =
-                                    stock_symbol_input_state.clone();
-                                ui_state
-                            },
-                        };
-
-                        terminal
-                            .draw(|mut f| {
-                                ui::draw(&mut f, &app).expect("draw failed");
-                            })
-                            .unwrap();
+    input_events
+        .clone()
+        .with_latest_from(
+            stock_symbol_input_states.clone(),
+            |(ev, stock_symbol_input_state)| (*ev, stock_symbol_input_state.clone()),
+        )
+        .with_latest_from(
+            stock_symbols.clone(),
+            |((ev, stock_symbol_input_state), stock_symbol)| {
+                (*ev, stock_symbol_input_state.clone(), stock_symbol.clone())
+            },
+        )
+        .with_latest_from(
+            stock_profiles.clone(),
+            |((ev, stock_symbol_input_state, stock_symbol), stock_profile)| {
+                (
+                    *ev,
+                    stock_symbol_input_state.clone(),
+                    stock_symbol.clone(),
+                    stock_profile.clone(),
+                )
+            },
+        )
+        .subscribe({
+            let terminal = &mut terminal;
+            let should_quit = &should_quit;
+            let ui_target_areas = ui_target_areas.clone();
+            move |(ev, stock_symbol_input_state, stock_symbol, stock_profile)| match ev {
+                InputEvent::Key(KeyEvent { code, .. }) => match code {
+                    KeyCode::Char('q') if !stock_symbol_input_state.active => {
+                        should_quit.store(true, AtomicOrdering::Relaxed);
+                    }
+                    KeyCode::Char(_) if !stock_symbol_input_state.active => {
+                        execute!(terminal.backend_mut(), crossterm::style::Print("\x07"),).unwrap();
                     }
                     _ => {}
                 },
-            );
-    }
+                InputEvent::Tick => {
+                    let app = App {
+                        stock: {
+                            let mut stock = Stock::default();
+                            stock.profile = Some(stock_profile.clone());
+                            stock.symbol = stock_symbol.clone();
+                            stock
+                        },
+                        ui_state: {
+                            let mut ui_state = UiState::default();
+                            ui_state.stock_symbol_input_state = stock_symbol_input_state.clone();
+                            ui_state.ui_target_areas = ui_target_areas.clone();
+                            ui_state
+                        },
+                    };
+
+                    terminal
+                        .draw(|mut f| {
+                            ui::draw(&mut f, &app).expect("draw failed");
+                        })
+                        .unwrap();
+                }
+                _ => {}
+            }
+        });
 
     let input_event_stream = EventStream::new()
         .filter(|ev| match ev {

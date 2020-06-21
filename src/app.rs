@@ -48,11 +48,11 @@ pub struct UiState<'r> {
     // pub frame_rate_counter: FrameRateCounter,
     // pub indicator: Option<Indicator>,
     // pub indicator_menu_state: RwLock<SelectMenuState<Indicator>>,
-    pub mouse_target_areas: Broadcast<'r, (), (UiTarget, Rect)>,
     // pub start_date: Option<DateTime<Utc>>,
     pub stock_symbol_input_state: InputState,
     // pub time_frame: TimeFrame,
     // pub time_frame_menu_state: RwLock<SelectMenuState<TimeFrame>>,
+    pub ui_target_areas: Broadcast<'r, (), (UiTarget, Option<Rect>)>,
 }
 
 impl<'r> UiState<'r> {
@@ -211,7 +211,6 @@ impl<'r> Default for UiState<'r> {
             //     menu_state.select_nth(0).unwrap();
             //     menu_state
             // }),
-            mouse_target_areas: Broadcast::new(),
             // start_date: None,
             stock_symbol_input_state: InputState::default(),
             // time_frame: TimeFrame::default(),
@@ -220,6 +219,7 @@ impl<'r> Default for UiState<'r> {
             //     menu_state.select(TimeFrame::default()).unwrap();
             //     menu_state
             // }),
+            ui_target_areas: Broadcast::new(),
         }
     }
 }
