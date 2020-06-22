@@ -6,8 +6,11 @@ use parking_lot::RwLock;
 use reactive_rs::Broadcast;
 use shrinkwraprs::Shrinkwrap;
 use std::{
+    cell::RefCell,
     fmt,
     num::ParseIntError,
+    ops::RangeInclusive,
+    rc::Rc,
     str::FromStr,
     sync::atomic::{self, AtomicU16},
 };
@@ -22,36 +25,16 @@ pub struct App<'r> {
     pub ui_state: UiState<'r>,
 }
 
-impl<'r> App<'r> {
-    // pub async fn load_stock(&mut self, symbol: &str) -> anyhow::Result<()> {
-    //     self.stock.symbol = symbol.to_ascii_uppercase();
-
-    //     self.ui_state.clear_date_range()?;
-
-    //     self.stock.load_profile().await?;
-    //     self.stock
-    //         .load_historical_prices(
-    //             self.ui_state.time_frame,
-    //             self.ui_state.start_date,
-    //             self.ui_state.end_date,
-    //         )
-    //         .await?;
-
-    //     Ok(())
-    // }
-}
-
-// #[derive(Debug)]
+#[derive(Clone)]
 pub struct UiState<'r> {
+    pub date_range: Option<RangeInclusive<DateTime<Utc>>>,
     // debug_draw: bool,
-    // pub end_date: Option<DateTime<Utc>>,
     // pub frame_rate_counter: FrameRateCounter,
     // pub indicator: Option<Indicator>,
     // pub indicator_menu_state: RwLock<SelectMenuState<Indicator>>,
-    // pub start_date: Option<DateTime<Utc>>,
     pub stock_symbol_input_state: InputState,
-    // pub time_frame: TimeFrame,
-    // pub time_frame_menu_state: RwLock<SelectMenuState<TimeFrame>>,
+    pub time_frame: TimeFrame,
+    pub time_frame_menu_state: Rc<RefCell<SelectMenuState<TimeFrame>>>,
     pub ui_target_areas: Broadcast<'r, (), (UiTarget, Option<Rect>)>,
 }
 
@@ -62,51 +45,6 @@ impl<'r> UiState<'r> {
 
     // pub fn set_debug_draw(&mut self, debug_draw: bool) -> anyhow::Result<()> {
     //     self.debug_draw = debug_draw;
-
-    //     Ok(())
-    // }
-
-    // pub fn shift_date_range_before(&mut self, dt: DateTime<Utc>) -> anyhow::Result<()> {
-    //     let time_frame_duration = self
-    //         .time_frame
-    //         .duration()
-    //         .expect("time frame has no duration");
-
-    //     let end_date = (dt - Duration::days(1)).date().and_hms(23, 59, 59);
-    //     let start_date = (end_date - time_frame_duration + Duration::days(1))
-    //         .date()
-    //         .and_hms(0, 0, 0);
-
-    //     self.start_date = Some(start_date);
-    //     self.end_date = Some(end_date);
-
-    //     Ok(())
-    // }
-
-    // pub fn shift_date_range_after(&mut self, dt: DateTime<Utc>) -> anyhow::Result<()> {
-    //     let time_frame_duration = self
-    //         .time_frame
-    //         .duration()
-    //         .expect("time frame has no duration");
-
-    //     let start_date = (dt + Duration::days(1)).date().and_hms(0, 0, 0);
-    //     let end_date = (start_date + time_frame_duration - Duration::days(1))
-    //         .date()
-    //         .and_hms(23, 59, 59);
-
-    //     self.start_date = Some(start_date);
-    //     self.end_date = Some(end_date);
-
-    //     if end_date > Utc::now() {
-    //         self.clear_date_range()?;
-    //     }
-
-    //     Ok(())
-    // }
-
-    // pub fn clear_date_range(&mut self) -> anyhow::Result<()> {
-    //     self.start_date = None;
-    //     self.end_date = None;
 
     //     Ok(())
     // }
@@ -201,8 +139,8 @@ impl<'r> UiState<'r> {
 impl<'r> Default for UiState<'r> {
     fn default() -> Self {
         Self {
+            date_range: None,
             // debug_draw: false,
-            // end_date: None,
             // frame_rate_counter: FrameRateCounter::new(Duration::milliseconds(1_000)),
             // indicator: None,
             // indicator_menu_state: RwLock::new({
@@ -211,14 +149,13 @@ impl<'r> Default for UiState<'r> {
             //     menu_state.select_nth(0).unwrap();
             //     menu_state
             // }),
-            // start_date: None,
             stock_symbol_input_state: InputState::default(),
-            // time_frame: TimeFrame::default(),
-            // time_frame_menu_state: RwLock::new({
-            //     let mut menu_state = SelectMenuState::new(TimeFrame::iter());
-            //     menu_state.select(TimeFrame::default()).unwrap();
-            //     menu_state
-            // }),
+            time_frame: TimeFrame::default(),
+            time_frame_menu_state: Rc::new(RefCell::new({
+                let mut menu_state = SelectMenuState::new(TimeFrame::iter());
+                menu_state.select(TimeFrame::default()).unwrap();
+                menu_state
+            })),
             ui_target_areas: Broadcast::new(),
         }
     }

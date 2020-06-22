@@ -6,21 +6,23 @@ use crate::{
 };
 use argh::FromArgs;
 use async_std::stream::{self, StreamExt};
+use chrono::{DateTime, Duration, Utc};
 use crossterm::{
     cursor,
     event::{Event, EventStream, KeyCode, KeyEvent, MouseButton, MouseEvent},
     execute, terminal,
 };
-use im::hashmap;
+use futures::executor;
+use im::{hashmap, ordset, HashMap, OrdSet};
 use reactive_rs::{Broadcast, Stream};
 use std::{
     io::{self, Write},
     panic,
-    sync::atomic::{AtomicBool, Ordering as AtomicOrdering},
+    sync::atomic::{self, AtomicBool},
     time,
 };
 use tui::{backend::CrosstermBackend, layout::Rect, Terminal};
-use yahoo_finance::Timestamped;
+use yahoo_finance::{history, Bar, Timestamped};
 
 mod app;
 mod event;
@@ -126,6 +128,7 @@ async fn main() -> anyhow::Result<()> {
     setup_panic_hook();
     setup_terminal();
 
+    let app_start_date = Utc::now();
     let should_quit = AtomicBool::new(false);
 
     let ui_target_areas: Broadcast<(), (UiTarget, Option<Rect>)> = Broadcast::new();
@@ -166,73 +169,143 @@ async fn main() -> anyhow::Result<()> {
         .distinct_until_changed()
         .broadcast();
 
-    let stock_profiles = event::stock_symbols_to_stock_profiles(stock_symbols.clone()).broadcast();
+    let time_frames: Broadcast<(), TimeFrame> =
+        Broadcast::new().start_with(args.time_frame).broadcast();
+
+    let end_dates: Broadcast<(), DateTime<Utc>> = Broadcast::new()
+        .start_with((app_start_date.date() - Duration::days(1)).and_hms(23, 59, 59))
+        .broadcast();
+
+    let date_ranges = time_frames
+        .clone()
+        .combine_latest(end_dates.clone(), |(time_frame, end_date)| {
+            (*time_frame, *end_date)
+        })
+        .map(|(time_frame, end_date)| {
+            time_frame
+                .duration()
+                .map(|duration| (*end_date - duration + Duration::seconds(1))..=*end_date)
+        })
+        .broadcast();
+
+    let stock_profiles = event::stock_symbols_to_stock_profiles(stock_symbols.clone())
+        .map(|stock_profile| Some(stock_profile.clone()))
+        .start_with(None)
+        .broadcast();
+
+    let stock_bars_vecs = stock_symbols
+        .clone()
+        .combine_latest(time_frames.clone(), |(stock_symbol, time_frame)| {
+            (stock_symbol.clone(), *time_frame)
+        })
+        .combine_latest(
+            date_ranges.clone(),
+            |((stock_symbol, time_frame), date_range)| {
+                (stock_symbol.clone(), *time_frame, date_range.clone())
+            },
+        )
+        .fold(
+            (None, hashmap! {}),
+            |(_, acc_stock_bars_map): &(_, HashMap<String, OrdSet<Bar>>),
+             (stock_symbol, time_frame, date_range)| {
+                let stock_bar_set = acc_stock_bars_map.get(stock_symbol);
+
+                let bars = if let Some(date_range) = date_range {
+                    executor::block_on(history::retrieve_range(
+                        stock_symbol.as_str(),
+                        *date_range.start(),
+                        Some(*date_range.end()),
+                    ))
+                } else {
+                    executor::block_on(history::retrieve_interval(
+                        stock_symbol.as_str(),
+                        time_frame.interval(),
+                    ))
+                }
+                .expect("historical prices retrieval failed");
+
+                let stock_bar_set = stock_bar_set.unwrap_or(&ordset![]).clone();
+                let stock_bar_set = stock_bar_set + OrdSet::from(bars);
+                let mut acc_stock_bars_map = acc_stock_bars_map.clone();
+                acc_stock_bars_map.insert(stock_symbol.clone(), stock_bar_set);
+
+                (Some(stock_symbol.clone()), acc_stock_bars_map)
+            },
+        )
+        .map(|(stock_symbol, stock_bars_map)| {
+            stock_bars_map
+                .get(stock_symbol.as_ref().unwrap())
+                .unwrap_or(&ordset![])
+                .clone()
+        })
+        .broadcast();
+
+    let stocks = stock_symbols
+        .clone()
+        .combine_latest(stock_profiles.clone(), |(stock_symbol, stock_profile)| {
+            (stock_symbol.clone(), stock_profile.clone())
+        })
+        .combine_latest(
+            stock_bars_vecs.clone(),
+            |((stock_symbol, stock_profile), stock_bars)| Stock {
+                bars: stock_bars.clone(),
+                profile: stock_profile.clone(),
+                symbol: stock_symbol.clone(),
+                ..Stock::default()
+            },
+        )
+        .start_with(Stock::default())
+        .broadcast();
 
     let stock_symbol_input_states =
         event::text_field_events_to_input_states(stock_symbol_text_field_events.clone())
             .broadcast();
 
+    let ui_states = time_frames
+        .clone()
+        .combine_latest(date_ranges.clone(), |(time_frame, date_range)| {
+            (*time_frame, date_range.clone())
+        })
+        .combine_latest(stock_symbol_input_states.clone(), {
+            let ui_target_areas = ui_target_areas.clone();
+            move |((time_frame, date_range), stock_symbol_input_state)| UiState {
+                date_range: date_range.clone(),
+                stock_symbol_input_state: stock_symbol_input_state.clone(),
+                time_frame: *time_frame,
+                ui_target_areas: ui_target_areas.clone(),
+                ..UiState::default()
+            }
+        })
+        .broadcast();
+
     input_events
         .clone()
-        .with_latest_from(
-            stock_symbol_input_states.clone(),
-            |(ev, stock_symbol_input_state)| (*ev, stock_symbol_input_state.clone()),
-        )
-        .with_latest_from(
-            stock_symbols.clone(),
-            |((ev, stock_symbol_input_state), stock_symbol)| {
-                (*ev, stock_symbol_input_state.clone(), stock_symbol.clone())
-            },
-        )
-        .with_latest_from(
-            stock_profiles.clone(),
-            |((ev, stock_symbol_input_state, stock_symbol), stock_profile)| {
-                (
-                    *ev,
-                    stock_symbol_input_state.clone(),
-                    stock_symbol.clone(),
-                    stock_profile.clone(),
-                )
-            },
-        )
-        .subscribe({
-            let terminal = &mut terminal;
-            let should_quit = &should_quit;
-            let ui_target_areas = ui_target_areas.clone();
-            move |(ev, stock_symbol_input_state, stock_symbol, stock_profile)| match ev {
-                InputEvent::Key(KeyEvent { code, .. }) => match code {
-                    KeyCode::Char('q') if !stock_symbol_input_state.active => {
-                        should_quit.store(true, AtomicOrdering::Relaxed);
-                    }
-                    KeyCode::Char(_) if !stock_symbol_input_state.active => {
-                        execute!(terminal.backend_mut(), crossterm::style::Print("\x07"),).unwrap();
-                    }
-                    _ => {}
-                },
-                InputEvent::Tick => {
-                    let app = App {
-                        stock: {
-                            let mut stock = Stock::default();
-                            stock.profile = Some(stock_profile.clone());
-                            stock.symbol = stock_symbol.clone();
-                            stock
-                        },
-                        ui_state: {
-                            let mut ui_state = UiState::default();
-                            ui_state.stock_symbol_input_state = stock_symbol_input_state.clone();
-                            ui_state.ui_target_areas = ui_target_areas.clone();
-                            ui_state
-                        },
-                    };
-
-                    terminal
-                        .draw(|mut f| {
-                            ui::draw(&mut f, &app).expect("draw failed");
-                        })
-                        .unwrap();
+        .with_latest_from(stocks.clone(), |(ev, stock)| (*ev, stock.clone()))
+        .with_latest_from(ui_states.clone(), |((ev, stock), ui_state)| {
+            (*ev, stock.clone(), ui_state.clone())
+        })
+        .subscribe(|(ev, stock, ui_state)| match ev {
+            InputEvent::Key(KeyEvent { code, .. }) => match code {
+                KeyCode::Char('q') if !ui_state.stock_symbol_input_state.active => {
+                    should_quit.store(true, atomic::Ordering::Relaxed);
+                }
+                KeyCode::Char(_) if !ui_state.stock_symbol_input_state.active => {
+                    execute!(terminal.backend_mut(), crossterm::style::Print("\x07"),).unwrap();
                 }
                 _ => {}
+            },
+            InputEvent::Tick => {
+                let app = App {
+                    stock: stock.clone(),
+                    ui_state: ui_state.clone(),
+                };
+                terminal
+                    .draw(|mut f| {
+                        ui::draw(&mut f, &app).expect("draw failed");
+                    })
+                    .unwrap();
             }
+            _ => {}
         });
 
     let input_event_stream = EventStream::new()
@@ -251,10 +324,12 @@ async fn main() -> anyhow::Result<()> {
 
     // hacky hacks
     stock_symbols.send(args.symbol);
+    time_frames.send(args.time_frame);
+    end_dates.send((app_start_date.date() - Duration::days(1)).and_hms(23, 59, 59));
     stock_symbol_input_states.send(InputState::default());
     input_events.send(InputEvent::Tick);
 
-    while !should_quit.load(AtomicOrdering::Relaxed) {
+    while !should_quit.load(atomic::Ordering::Relaxed) {
         input_events.send(input_event_stream.next().await.unwrap());
     }
 
