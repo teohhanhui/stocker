@@ -12,8 +12,7 @@ use crossterm::{
     event::{Event, EventStream, KeyCode, KeyEvent, MouseButton, MouseEvent},
     execute, terminal,
 };
-use futures::executor;
-use im::{hashmap, ordset, HashMap, OrdSet};
+use im::hashmap;
 use reactive_rs::{Broadcast, Stream};
 use std::{
     io::{self, Write},
@@ -22,7 +21,7 @@ use std::{
     time,
 };
 use tui::{backend::CrosstermBackend, layout::Rect, Terminal};
-use yahoo_finance::{history, Bar, Timestamped};
+use yahoo_finance::Timestamped;
 
 mod app;
 mod event;
@@ -173,7 +172,7 @@ async fn main() -> anyhow::Result<()> {
         Broadcast::new().start_with(args.time_frame).broadcast();
 
     let end_dates: Broadcast<(), DateTime<Utc>> = Broadcast::new()
-        .start_with((app_start_date.date() - Duration::days(1)).and_hms(23, 59, 59))
+        .start_with(app_start_date.date().and_hms(0, 0, 0) + Duration::days(1))
         .broadcast();
 
     let date_ranges = time_frames
@@ -184,61 +183,21 @@ async fn main() -> anyhow::Result<()> {
         .map(|(time_frame, end_date)| {
             time_frame
                 .duration()
-                .map(|duration| (*end_date - duration + Duration::seconds(1))..=*end_date)
+                .map(|duration| (*end_date - duration)..*end_date)
         })
         .broadcast();
 
-    let stock_profiles = event::stock_symbols_to_stock_profiles(stock_symbols.clone())
+    let stock_profiles = stock::to_stock_profiles(stock_symbols.clone())
         .map(|stock_profile| Some(stock_profile.clone()))
         .start_with(None)
         .broadcast();
 
-    let stock_bars_vecs = stock_symbols
-        .clone()
-        .combine_latest(time_frames.clone(), |(stock_symbol, time_frame)| {
-            (stock_symbol.clone(), *time_frame)
-        })
-        .combine_latest(
-            date_ranges.clone(),
-            |((stock_symbol, time_frame), date_range)| {
-                (stock_symbol.clone(), *time_frame, date_range.clone())
-            },
-        )
-        .fold(
-            (None, hashmap! {}),
-            |(_, acc_stock_bars_map): &(_, HashMap<String, OrdSet<Bar>>),
-             (stock_symbol, time_frame, date_range)| {
-                let stock_bar_set = acc_stock_bars_map.get(stock_symbol);
-
-                let bars = if let Some(date_range) = date_range {
-                    executor::block_on(history::retrieve_range(
-                        stock_symbol.as_str(),
-                        *date_range.start(),
-                        Some(*date_range.end()),
-                    ))
-                } else {
-                    executor::block_on(history::retrieve_interval(
-                        stock_symbol.as_str(),
-                        time_frame.interval(),
-                    ))
-                }
-                .expect("historical prices retrieval failed");
-
-                let stock_bar_set = stock_bar_set.unwrap_or(&ordset![]).clone();
-                let stock_bar_set = stock_bar_set + OrdSet::from(bars);
-                let mut acc_stock_bars_map = acc_stock_bars_map.clone();
-                acc_stock_bars_map.insert(stock_symbol.clone(), stock_bar_set);
-
-                (Some(stock_symbol.clone()), acc_stock_bars_map)
-            },
-        )
-        .map(|(stock_symbol, stock_bars_map)| {
-            stock_bars_map
-                .get(stock_symbol.as_ref().unwrap())
-                .unwrap_or(&ordset![])
-                .clone()
-        })
-        .broadcast();
+    let stock_bar_sets = stock::to_stock_bar_sets(
+        stock_symbols.clone(),
+        time_frames.clone(),
+        date_ranges.clone(),
+    )
+    .broadcast();
 
     let stocks = stock_symbols
         .clone()
@@ -246,9 +205,9 @@ async fn main() -> anyhow::Result<()> {
             (stock_symbol.clone(), stock_profile.clone())
         })
         .combine_latest(
-            stock_bars_vecs.clone(),
-            |((stock_symbol, stock_profile), stock_bars)| Stock {
-                bars: stock_bars.clone(),
+            stock_bar_sets.clone(),
+            |((stock_symbol, stock_profile), stock_bar_set)| Stock {
+                bars: stock_bar_set.clone(),
                 profile: stock_profile.clone(),
                 symbol: stock_symbol.clone(),
                 ..Stock::default()
@@ -325,7 +284,7 @@ async fn main() -> anyhow::Result<()> {
     // hacky hacks
     stock_symbols.send(args.symbol);
     time_frames.send(args.time_frame);
-    end_dates.send((app_start_date.date() - Duration::days(1)).and_hms(23, 59, 59));
+    end_dates.send(app_start_date.date().and_hms(0, 0, 0) + Duration::days(1));
     stock_symbol_input_states.send(InputState::default());
     input_events.send(InputEvent::Tick);
 

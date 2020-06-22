@@ -6,7 +6,7 @@ use chrono::{Duration, TimeZone, Utc};
 use itertools::Itertools;
 use itertools::MinMaxResult::{MinMax, NoElements, OneElement};
 use math::round;
-use std::{cmp, iter};
+use std::{cmp, iter, ops::Range};
 use strum::IntoEnumIterator;
 use ta::indicators;
 use ta::{DataItem, Next};
@@ -136,10 +136,14 @@ fn draw_body<B: Backend>(
         }
         OneElement(t) => vec![t, t],
         NoElements => {
-            if let Some(date_range) = &ui_state.date_range {
+            if let Some(Range {
+                start: start_date,
+                end: end_date,
+            }) = &ui_state.date_range
+            {
                 vec![
-                    date_range.start().timestamp() as f64,
-                    date_range.end().timestamp() as f64,
+                    start_date.timestamp() as f64,
+                    (*end_date - Duration::seconds(1)).timestamp() as f64,
                 ]
             } else {
                 vec![

@@ -9,7 +9,7 @@ use std::{
     cell::RefCell,
     fmt,
     num::ParseIntError,
-    ops::RangeInclusive,
+    ops::Range,
     rc::Rc,
     str::FromStr,
     sync::atomic::{self, AtomicU16},
@@ -27,7 +27,7 @@ pub struct App<'r> {
 
 #[derive(Clone)]
 pub struct UiState<'r> {
-    pub date_range: Option<RangeInclusive<DateTime<Utc>>>,
+    pub date_range: Option<Range<DateTime<Utc>>>,
     // debug_draw: bool,
     // pub frame_rate_counter: FrameRateCounter,
     // pub indicator: Option<Indicator>,

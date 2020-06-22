@@ -3,11 +3,9 @@ use crate::{
     reactive::StreamExt,
 };
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent};
-use futures::executor;
 use im::hashmap::HashMap;
 use reactive_rs::Stream;
 use tui::layout::Rect;
-use yahoo_finance::Profile;
 
 #[derive(Clone, Copy, Debug)]
 pub enum InputEvent {
@@ -216,36 +214,5 @@ impl TextFieldMapMouseFn {
             ),
             _ => (input_state, None),
         }
-    }
-}
-
-pub fn stock_symbols_to_stock_profiles<'a, S>(stock_symbols: S) -> StockSymbolToStockProfile<S>
-where
-    S: Stream<'a, Item = String>,
-{
-    StockSymbolToStockProfile { stock_symbols }
-}
-
-pub struct StockSymbolToStockProfile<S> {
-    stock_symbols: S,
-}
-
-impl<'a, S> Stream<'a> for StockSymbolToStockProfile<S>
-where
-    S: Stream<'a, Item = String>,
-{
-    type Context = S::Context;
-    type Item = Profile;
-
-    fn subscribe_ctx<O>(self, mut observer: O)
-    where
-        O: 'a + FnMut(&Self::Context, &Self::Item),
-    {
-        self.stock_symbols.subscribe_ctx(move |ctx, symbol| {
-            let profile =
-                executor::block_on(Profile::load(symbol.as_str())).expect("profile load failed");
-
-            observer(ctx, &profile);
-        });
     }
 }
