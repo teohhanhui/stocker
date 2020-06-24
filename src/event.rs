@@ -104,29 +104,26 @@ pub fn text_field_events_to_input_states<'a, S, C>(
 ) -> impl Stream<'a, Item = InputState, Context = C>
 where
     S: Stream<'a, Item = TextFieldEvent, Context = C>,
-    C: Default,
 {
-    text_field_events
-        .fold(InputState::default(), |acc_input_state, ev| match ev {
-            TextFieldEvent::Activate => InputState {
-                active: true,
-                value: acc_input_state.value.clone(),
-            },
-            TextFieldEvent::Modify(value) => InputState {
-                value: value.clone(),
-                ..*acc_input_state
-            },
-            TextFieldEvent::Accept(_) | TextFieldEvent::Cancel => InputState::default(),
-            TextFieldEvent::Toggle if acc_input_state.active => InputState::default(),
-            TextFieldEvent::Toggle if !acc_input_state.active => InputState {
-                active: true,
-                value: acc_input_state.value.clone(),
-            },
-            _ => {
-                unreachable!();
-            }
-        })
-        .start_with(InputState::default())
+    text_field_events.fold(InputState::default(), |acc_input_state, ev| match ev {
+        TextFieldEvent::Activate => InputState {
+            active: true,
+            value: acc_input_state.value.clone(),
+        },
+        TextFieldEvent::Modify(value) => InputState {
+            value: value.clone(),
+            ..*acc_input_state
+        },
+        TextFieldEvent::Accept(_) | TextFieldEvent::Cancel => InputState::default(),
+        TextFieldEvent::Toggle if acc_input_state.active => InputState::default(),
+        TextFieldEvent::Toggle if !acc_input_state.active => InputState {
+            active: true,
+            value: acc_input_state.value.clone(),
+        },
+        _ => {
+            unreachable!();
+        }
+    })
 }
 
 pub fn ui_target_areas_to_text_field_map_mouse_funcs<'a, S, C>(

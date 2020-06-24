@@ -132,8 +132,7 @@ async fn main() -> anyhow::Result<()> {
 
     let ui_target_areas: Broadcast<(), (UiTarget, Option<Rect>)> = Broadcast::new();
 
-    let input_events: Broadcast<(), InputEvent> =
-        Broadcast::new().start_with(InputEvent::Tick).broadcast();
+    let input_events: Broadcast<(), InputEvent> = Broadcast::new();
 
     let stock_symbol_text_field_map_mouse_funcs =
         event::ui_target_areas_to_text_field_map_mouse_funcs(
@@ -164,16 +163,12 @@ async fn main() -> anyhow::Result<()> {
                 acc_symbol.clone()
             }
         })
-        .start_with(args.symbol.clone())
         .distinct_until_changed()
         .broadcast();
 
-    let time_frames: Broadcast<(), TimeFrame> =
-        Broadcast::new().start_with(args.time_frame).broadcast();
+    let time_frames: Broadcast<(), TimeFrame> = Broadcast::new();
 
-    let end_dates: Broadcast<(), DateTime<Utc>> = Broadcast::new()
-        .start_with(app_start_date.date().and_hms(0, 0, 0) + Duration::days(1))
-        .broadcast();
+    let end_dates: Broadcast<(), DateTime<Utc>> = Broadcast::new();
 
     let date_ranges = time_frames
         .clone()
@@ -189,7 +184,6 @@ async fn main() -> anyhow::Result<()> {
 
     let stock_profiles = stock::to_stock_profiles(stock_symbols.clone())
         .map(|stock_profile| Some(stock_profile.clone()))
-        .start_with(None)
         .broadcast();
 
     let stock_bar_sets = stock::to_stock_bar_sets(
@@ -213,7 +207,6 @@ async fn main() -> anyhow::Result<()> {
                 ..Stock::default()
             },
         )
-        .start_with(Stock::default())
         .broadcast();
 
     let stock_symbol_input_states =
@@ -281,12 +274,29 @@ async fn main() -> anyhow::Result<()> {
     let input_tick_stream = tick_stream.map(|()| InputEvent::Tick);
     let mut input_event_stream = input_event_stream.merge(input_tick_stream);
 
-    // hacky hacks
+    // draw once before hitting the network, as it's blocking
+    stocks.send(Stock {
+        symbol: args.symbol.clone(),
+        ..Stock::default()
+    });
+    ui_states.send(UiState {
+        date_range: {
+            let end_date = app_start_date.date().and_hms(0, 0, 0) + Duration::days(1);
+            args.time_frame
+                .duration()
+                .map(|duration| (end_date - duration)..end_date)
+        },
+        time_frame: args.time_frame,
+        ..UiState::default()
+    });
+    input_events.send(InputEvent::Tick);
+
+    // send the intial values
     stock_symbols.send(args.symbol);
+    stock_profiles.send(None);
     time_frames.send(args.time_frame);
     end_dates.send(app_start_date.date().and_hms(0, 0, 0) + Duration::days(1));
     stock_symbol_input_states.send(InputState::default());
-    input_events.send(InputEvent::Tick);
 
     while !should_quit.load(atomic::Ordering::Relaxed) {
         input_events.send(input_event_stream.next().await.unwrap());
