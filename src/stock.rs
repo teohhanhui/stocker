@@ -1,11 +1,11 @@
 use crate::{app::TimeFrame, reactive::StreamExt};
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use futures::executor;
-use gcollections::ops::{Bounded, Difference, IsEmpty};
+use gcollections::ops::{Bounded, Difference, Union};
 use im::{hashmap, ordset, HashMap, OrdSet};
 use interval::interval_set::{IntervalSet, ToIntervalSet};
 use reactive_rs::Stream;
-use std::{cell::RefCell, iter, ops::Range, rc::Rc};
+use std::{cell::RefCell, ops::Range, rc::Rc};
 use yahoo_finance::{history, Bar, Profile, Quote, Timestamped};
 
 #[derive(Clone, Debug, Default)]
@@ -53,21 +53,23 @@ where
         O: 'a + FnMut(&Self::Context, &Self::Item),
     {
         let stock_profile_map = self.stock_profile_map.clone();
-        self.stock_symbols.subscribe_ctx(move |ctx, stock_symbol| {
-            let profile = {
-                let stock_profile_map = stock_profile_map.borrow();
-                stock_profile_map.get(stock_symbol).cloned()
-            };
-            let profile = profile.unwrap_or_else(|| {
-                let profile = executor::block_on(Profile::load(stock_symbol.as_str()))
-                    .expect("profile load failed");
-                let mut stock_profile_map = stock_profile_map.borrow_mut();
-                stock_profile_map.insert(stock_symbol.clone(), profile.clone());
-                profile
-            });
+        self.stock_symbols
+            .distinct_until_changed()
+            .subscribe_ctx(move |ctx, stock_symbol| {
+                let profile = {
+                    let stock_profile_map = stock_profile_map.borrow();
+                    stock_profile_map.get(stock_symbol).cloned()
+                };
+                let profile = profile.unwrap_or_else(|| {
+                    let profile = executor::block_on(Profile::load(stock_symbol.as_str()))
+                        .expect("profile load failed");
+                    let mut stock_profile_map = stock_profile_map.borrow_mut();
+                    stock_profile_map.insert(stock_symbol.clone(), profile.clone());
+                    profile
+                });
 
-            observer(ctx, &profile);
-        });
+                observer(ctx, &profile);
+            });
     }
 }
 
@@ -115,11 +117,13 @@ where
     {
         let stock_bars_map = self.stock_bars_map.clone();
         self.stock_symbols
-            .combine_latest(self.time_frames, |(stock_symbol, time_frame)| {
-                (stock_symbol.clone(), *time_frame)
-            })
+            .distinct_until_changed()
             .combine_latest(
-                self.date_ranges,
+                self.time_frames.distinct_until_changed(),
+                |(stock_symbol, time_frame)| (stock_symbol.clone(), *time_frame),
+            )
+            .combine_latest(
+                self.date_ranges.distinct_until_changed(),
                 |((stock_symbol, time_frame), date_range)| {
                     (stock_symbol.clone(), *time_frame, date_range.clone())
                 },
@@ -134,21 +138,12 @@ where
                 };
 
                 let (stock_bar_set, covered_date_ranges) = if let Some(date_range) = date_range {
-                    let uncovered_date_ranges = if covered_date_ranges.is_empty() {
-                        (
-                            date_range.start.timestamp(),
-                            (date_range.end - Duration::seconds(1)).timestamp(),
-                        )
-                            .to_interval_set()
-                    } else {
-                        covered_date_ranges.difference(
-                            &(
-                                date_range.start.timestamp(),
-                                (date_range.end - Duration::seconds(1)).timestamp(),
-                            )
-                                .to_interval_set(),
-                        )
-                    };
+                    let uncovered_date_ranges = (
+                        date_range.start.timestamp(),
+                        (date_range.end - Duration::seconds(1)).timestamp(),
+                    )
+                        .to_interval_set()
+                        .difference(&covered_date_ranges);
 
                     let mut covered_date_ranges = covered_date_ranges;
                     let mut stock_bar_set = stock_bar_set;
@@ -159,16 +154,10 @@ where
                             Some(Utc.timestamp(uncovered_date_range.upper(), 0)),
                         ))
                         .expect("historical prices retrieval failed");
-                        covered_date_ranges = covered_date_ranges
-                            .iter()
-                            .cloned()
-                            .map(|r| (r.lower(), r.upper()))
-                            .chain(iter::once((
-                                uncovered_date_range.lower(),
-                                uncovered_date_range.upper(),
-                            )))
-                            .collect::<Vec<_>>()
-                            .to_interval_set();
+                        covered_date_ranges = covered_date_ranges.union(
+                            &vec![(uncovered_date_range.lower(), uncovered_date_range.upper())]
+                                .to_interval_set(),
+                        );
                         stock_bar_set = stock_bar_set + OrdSet::from(bars);
                     }
 
@@ -181,16 +170,13 @@ where
                     .expect("historical prices retrieval failed");
                     let covered_date_ranges =
                         if let (Some(first_bar), Some(last_bar)) = (bars.first(), bars.last()) {
-                            covered_date_ranges
-                                .iter()
-                                .cloned()
-                                .map(|r| (r.lower(), r.upper()))
-                                .chain(iter::once((
+                            covered_date_ranges.union(
+                                &vec![(
                                     first_bar.timestamp_seconds() as i64,
                                     last_bar.timestamp_seconds() as i64,
-                                )))
-                                .collect::<Vec<_>>()
-                                .to_interval_set()
+                                )]
+                                .to_interval_set(),
+                            )
                         } else {
                             covered_date_ranges
                         };

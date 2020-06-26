@@ -4,7 +4,7 @@ use crate::{
 };
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent};
 use im::hashmap::HashMap;
-use reactive_rs::Stream;
+use reactive_rs::{Broadcast, Stream};
 use tui::layout::Rect;
 
 #[derive(Clone, Copy, Debug)]
@@ -23,24 +23,33 @@ pub enum TextFieldEvent {
     Toggle,
 }
 
-pub fn input_events_to_text_field_events<'a, S, R, F, C>(
+pub fn input_events_to_text_field_events<'a, S, U, R, F, C>(
     input_events: S,
+    active_overlay_ui_targets: U,
     activation_key_code: KeyCode,
     map_mouse_funcs: R,
     map_value_func: F,
 ) -> impl Stream<'a, Item = TextFieldEvent, Context = C>
 where
     S: Stream<'a, Item = InputEvent, Context = C>,
+    U: Stream<'a, Item = Option<UiTarget>>,
     R: Stream<'a, Item = TextFieldMapMouseFn>,
     F: 'a + Clone + FnOnce(String) -> String,
 {
     input_events
-        .with_latest_from(map_mouse_funcs, |(ev, map_mouse_func)| {
-            (*ev, map_mouse_func.clone())
-        })
+        .with_latest_from(
+            active_overlay_ui_targets,
+            |(ev, active_overlay_ui_target)| (*ev, *active_overlay_ui_target),
+        )
+        .with_latest_from(
+            map_mouse_funcs,
+            |((ev, active_overlay_ui_target), map_mouse_func)| {
+                (*ev, *active_overlay_ui_target, map_mouse_func.clone())
+            },
+        )
         .fold(
             (InputState::default(), None),
-            move |(acc_input_state, _), (ev, map_mouse_func)| match ev {
+            move |(acc_input_state, _), (ev, active_overlay_ui_target, map_mouse_func)| match ev {
                 InputEvent::Key(KeyEvent { code, .. }) => match code {
                     KeyCode::Backspace if acc_input_state.active => {
                         let mut value = acc_input_state.value.clone();
@@ -68,13 +77,19 @@ where
                     KeyCode::Esc if acc_input_state.active => {
                         (InputState::default(), Some(TextFieldEvent::Cancel))
                     }
-                    &key_code if key_code == activation_key_code && !acc_input_state.active => (
-                        InputState {
-                            active: true,
-                            value: acc_input_state.value.clone(),
-                        },
-                        Some(TextFieldEvent::Activate),
-                    ),
+                    &key_code
+                        if key_code == activation_key_code
+                            && !acc_input_state.active
+                            && active_overlay_ui_target.is_none() =>
+                    {
+                        (
+                            InputState {
+                                active: true,
+                                value: acc_input_state.value.clone(),
+                            },
+                            Some(TextFieldEvent::Activate),
+                        )
+                    }
                     KeyCode::Char(c) if acc_input_state.active => {
                         let mut value = acc_input_state.value.clone();
                         value.push(*c);
@@ -124,6 +139,32 @@ where
             unreachable!();
         }
     })
+}
+
+/// Connects a `Stream` of text field events to a `Broadcast` of the active overlay UI target.
+///
+/// It is necessary for completing the cycle.
+pub fn connect_text_field_events_to_active_overlay_ui_targets<'a, S, C>(
+    text_field_events: S,
+    active_overlay_ui_targets: Broadcast<'a, C, Option<UiTarget>>,
+) where
+    S: Stream<'a, Item = TextFieldEvent>,
+    C: 'a + Default,
+{
+    text_field_events
+        .fold(None, |acc_active_target, ev| match ev {
+            TextFieldEvent::Activate => Some(UiTarget::StockSymbolInput),
+            TextFieldEvent::Accept(_) | TextFieldEvent::Cancel => None,
+            TextFieldEvent::Toggle if acc_active_target.is_some() => None,
+            TextFieldEvent::Toggle if acc_active_target.is_none() => {
+                Some(UiTarget::StockSymbolInput)
+            }
+            _ => *acc_active_target,
+        })
+        .distinct_until_changed()
+        .subscribe(move |active_target| {
+            active_overlay_ui_targets.send(*active_target);
+        });
 }
 
 pub fn ui_target_areas_to_text_field_map_mouse_funcs<'a, S, C>(

@@ -217,8 +217,11 @@ where
         self.stream_a.subscribe_ctx({
             let buf_b = buf_b.clone();
             move |ctx, a| {
-                if let Some(b) = &*buf_b.borrow() {
-                    observer(ctx, &func.call_mut(ctx, &(a.clone(), b.clone())));
+                if let Some(b) = {
+                    let buf_b = buf_b.borrow();
+                    buf_b.as_ref().cloned()
+                } {
+                    observer(ctx, &func.call_mut(ctx, &(a.clone(), b)));
                 }
             }
         });

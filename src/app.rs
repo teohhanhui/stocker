@@ -1,9 +1,10 @@
-use crate::{stock::Stock, widgets::SelectMenuState};
+use crate::{event::InputEvent, reactive::StreamExt, stock::Stock, widgets::SelectMenuState};
 use chrono::{DateTime, Duration, Utc};
+use crossterm::event::{KeyCode, KeyEvent};
 use derive_more::{Display, From, FromStr, Into};
 use math::round;
 use parking_lot::RwLock;
-use reactive_rs::Broadcast;
+use reactive_rs::{Broadcast, Stream};
 use shrinkwraprs::Shrinkwrap;
 use std::{
     cell::RefCell,
@@ -25,9 +26,11 @@ pub struct App<'r> {
     pub ui_state: UiState<'r>,
 }
 
+type DateRange = Range<DateTime<Utc>>;
+
 #[derive(Clone)]
 pub struct UiState<'r> {
-    pub date_range: Option<Range<DateTime<Utc>>>,
+    pub date_range: Option<DateRange>,
     // debug_draw: bool,
     // pub frame_rate_counter: FrameRateCounter,
     // pub indicator: Option<Indicator>,
@@ -39,34 +42,6 @@ pub struct UiState<'r> {
 }
 
 impl<'r> UiState<'r> {
-    // pub fn debug_draw(&self) -> bool {
-    //     self.debug_draw
-    // }
-
-    // pub fn set_debug_draw(&mut self, debug_draw: bool) -> anyhow::Result<()> {
-    //     self.debug_draw = debug_draw;
-
-    //     Ok(())
-    // }
-
-    // pub fn set_indicator(&mut self, indicator: Indicator) -> anyhow::Result<()> {
-    //     self.indicator = Some(indicator);
-    //     let mut indicator_menu_state = self.indicator_menu_state.write();
-    //     indicator_menu_state.clear_selection()?;
-    //     indicator_menu_state.select(indicator).ok();
-
-    //     Ok(())
-    // }
-
-    // pub fn clear_indicator(&mut self) -> anyhow::Result<()> {
-    //     self.indicator = None;
-    //     let mut indicator_menu_state = self.indicator_menu_state.write();
-    //     indicator_menu_state.clear_selection()?;
-    //     indicator_menu_state.select_nth(0)?;
-
-    //     Ok(())
-    // }
-
     // pub fn input_cursor(
     //     &self,
     //     input_state: &InputState,
@@ -125,15 +100,6 @@ impl<'r> UiState<'r> {
 
     //     None
     // }
-
-    // pub fn set_time_frame(&mut self, time_frame: TimeFrame) -> anyhow::Result<()> {
-    //     self.time_frame = time_frame;
-    //     self.time_frame_menu_state.write().select(time_frame)?;
-
-    //     self.clear_date_range()?;
-
-    //     Ok(())
-    // }
 }
 
 impl<'r> Default for UiState<'r> {
@@ -159,6 +125,109 @@ impl<'r> Default for UiState<'r> {
             ui_target_areas: Broadcast::new(),
         }
     }
+}
+
+pub fn to_date_ranges<'a, V, S, R, U, C>(
+    input_events: V,
+    stock_symbols: S,
+    time_frames: R,
+    active_overlay_ui_targets: U,
+) -> impl Stream<'a, Item = Option<DateRange>, Context = C>
+where
+    V: Stream<'a, Item = InputEvent, Context = C>,
+    S: Stream<'a, Item = String>,
+    R: Stream<'a, Item = TimeFrame>,
+    U: Stream<'a, Item = Option<UiTarget>>,
+    C: 'a + Clone,
+{
+    input_events
+        .combine_latest(
+            stock_symbols.distinct_until_changed(),
+            |(ev, stock_symbol)| (*ev, stock_symbol.clone()),
+        )
+        .combine_latest(
+            time_frames.distinct_until_changed(),
+            |((ev, stock_symbol), time_frame)| (*ev, stock_symbol.clone(), *time_frame),
+        )
+        .with_latest_from(
+            active_overlay_ui_targets,
+            |((ev, stock_symbol, time_frame), active_overlay_ui_target)| {
+                (
+                    *ev,
+                    stock_symbol.clone(),
+                    *time_frame,
+                    *active_overlay_ui_target,
+                )
+            },
+        )
+        .fold(
+            (None, None, None),
+            |(acc_stock_symbol, acc_time_frame, acc_date_range): &(
+                Option<String>,
+                Option<TimeFrame>,
+                Option<DateRange>,
+            ),
+             (ev, stock_symbol, time_frame, active_overlay_ui_target)| {
+                let stock_symbol_changed =
+                    acc_stock_symbol.is_some() && acc_stock_symbol.as_ref() != Some(stock_symbol);
+                let time_frame_changed =
+                    acc_time_frame.is_some() && acc_time_frame.as_ref() != Some(time_frame);
+                let acc_date_range =
+                    if acc_time_frame.is_some() && !stock_symbol_changed && !time_frame_changed {
+                        acc_date_range.clone()
+                    } else {
+                        time_frame.now_date_range()
+                    };
+                if stock_symbol_changed || time_frame_changed {
+                    return (
+                        Some(stock_symbol.clone()),
+                        Some(*time_frame),
+                        acc_date_range,
+                    );
+                }
+
+                match ev {
+                    InputEvent::Key(KeyEvent { code, .. }) => match code {
+                        KeyCode::Left if active_overlay_ui_target.is_none() => {
+                            let date_range = time_frame.duration().map(|duration| {
+                                acc_date_range
+                                    .as_ref()
+                                    .map(|acc_date_range| {
+                                        let end_date = acc_date_range.start;
+                                        (end_date - duration)..end_date
+                                    })
+                                    .unwrap()
+                            });
+                            (Some(stock_symbol.clone()), Some(*time_frame), date_range)
+                        }
+                        KeyCode::Right if active_overlay_ui_target.is_none() => {
+                            let date_range = time_frame.duration().map(|duration| {
+                                acc_date_range
+                                    .as_ref()
+                                    .map(|acc_date_range| {
+                                        let start_date = acc_date_range.end;
+                                        start_date..(start_date + duration)
+                                    })
+                                    .map(|date_range| {
+                                        let max_date_range = time_frame.now_date_range().unwrap();
+                                        if date_range.end > max_date_range.end {
+                                            max_date_range
+                                        } else {
+                                            date_range
+                                        }
+                                    })
+                                    .unwrap()
+                            });
+                            (Some(stock_symbol.clone()), Some(*time_frame), date_range)
+                        }
+                        _ => (acc_stock_symbol.clone(), *acc_time_frame, acc_date_range),
+                    },
+                    _ => (acc_stock_symbol.clone(), *acc_time_frame, acc_date_range),
+                }
+            },
+        )
+        .map(|(_, _, date_range)| date_range.clone())
+        .distinct_until_changed()
 }
 
 #[derive(Clone, Debug)]
@@ -356,6 +425,13 @@ impl TimeFrame {
             Self::TenYears => Interval::_10y,
             Self::Max => Interval::_max,
         }
+    }
+
+    pub fn now_date_range(self) -> Option<DateRange> {
+        self.duration().map(|duration| {
+            let end_date = Utc::now().date().and_hms(0, 0, 0) + Duration::days(1);
+            (end_date - duration)..end_date
+        })
     }
 }
 

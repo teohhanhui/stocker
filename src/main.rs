@@ -6,10 +6,10 @@ use crate::{
 };
 use argh::FromArgs;
 use async_std::stream::{self, StreamExt};
-use chrono::{DateTime, Duration, Utc};
+use chrono::{Duration, Utc};
 use crossterm::{
     cursor,
-    event::{Event, EventStream, KeyCode, KeyEvent, MouseButton, MouseEvent},
+    event::{Event, EventStream, KeyCode, KeyEvent},
     execute, terminal,
 };
 use im::hashmap;
@@ -21,7 +21,6 @@ use std::{
     time,
 };
 use tui::{backend::CrosstermBackend, layout::Rect, Terminal};
-use yahoo_finance::Timestamped;
 
 mod app;
 mod event;
@@ -132,7 +131,15 @@ async fn main() -> anyhow::Result<()> {
 
     let ui_target_areas: Broadcast<(), (UiTarget, Option<Rect>)> = Broadcast::new();
 
+    let active_overlay_ui_targets: Broadcast<(), Option<UiTarget>> = Broadcast::new();
+
     let input_events: Broadcast<(), InputEvent> = Broadcast::new();
+
+    // input events without ticks
+    let user_input_events = input_events
+        .clone()
+        .filter(|ev| !matches!(ev, InputEvent::Tick))
+        .broadcast();
 
     let stock_symbol_text_field_map_mouse_funcs =
         event::ui_target_areas_to_text_field_map_mouse_funcs(
@@ -147,12 +154,18 @@ async fn main() -> anyhow::Result<()> {
         .broadcast();
 
     let stock_symbol_text_field_events = event::input_events_to_text_field_events(
-        input_events.clone(),
+        user_input_events.clone(),
+        active_overlay_ui_targets.clone(),
         KeyCode::Char('s'),
         stock_symbol_text_field_map_mouse_funcs.clone(),
         |v| v.to_ascii_uppercase(),
     )
     .broadcast();
+
+    event::connect_text_field_events_to_active_overlay_ui_targets(
+        stock_symbol_text_field_events.clone(),
+        active_overlay_ui_targets.clone(),
+    );
 
     let stock_symbols = stock_symbol_text_field_events
         .clone()
@@ -168,19 +181,13 @@ async fn main() -> anyhow::Result<()> {
 
     let time_frames: Broadcast<(), TimeFrame> = Broadcast::new();
 
-    let end_dates: Broadcast<(), DateTime<Utc>> = Broadcast::new();
-
-    let date_ranges = time_frames
-        .clone()
-        .combine_latest(end_dates.clone(), |(time_frame, end_date)| {
-            (*time_frame, *end_date)
-        })
-        .map(|(time_frame, end_date)| {
-            time_frame
-                .duration()
-                .map(|duration| (*end_date - duration)..*end_date)
-        })
-        .broadcast();
+    let date_ranges = app::to_date_ranges(
+        user_input_events.clone(),
+        stock_symbols.clone(),
+        time_frames.clone(),
+        active_overlay_ui_targets.clone(),
+    )
+    .broadcast();
 
     let stock_profiles = stock::to_stock_profiles(stock_symbols.clone())
         .map(|stock_profile| Some(stock_profile.clone()))
@@ -274,58 +281,37 @@ async fn main() -> anyhow::Result<()> {
     let input_tick_stream = tick_stream.map(|()| InputEvent::Tick);
     let mut input_event_stream = input_event_stream.merge(input_tick_stream);
 
-    // draw once before hitting the network, as it's blocking
+    // draw once before hitting the network, as it is blocking
     stocks.send(Stock {
         symbol: args.symbol.clone(),
         ..Stock::default()
     });
     ui_states.send(UiState {
         date_range: {
-            let end_date = app_start_date.date().and_hms(0, 0, 0) + Duration::days(1);
-            args.time_frame
-                .duration()
-                .map(|duration| (end_date - duration)..end_date)
+            args.time_frame.duration().map(|duration| {
+                let end_date = app_start_date.date().and_hms(0, 0, 0) + Duration::days(1);
+                (end_date - duration)..end_date
+            })
         },
         time_frame: args.time_frame,
         ..UiState::default()
     });
     input_events.send(InputEvent::Tick);
 
-    // send the intial values
+    // send the initial values
     stock_symbols.send(args.symbol);
     stock_profiles.send(None);
     time_frames.send(args.time_frame);
-    end_dates.send(app_start_date.date().and_hms(0, 0, 0) + Duration::days(1));
+    date_ranges.send(args.time_frame.duration().map(|duration| {
+        let end_date = app_start_date.date().and_hms(0, 0, 0) + Duration::days(1);
+        (end_date - duration)..end_date
+    }));
+    active_overlay_ui_targets.send(None);
     stock_symbol_input_states.send(InputState::default());
 
     while !should_quit.load(atomic::Ordering::Relaxed) {
         input_events.send(input_event_stream.next().await.unwrap());
     }
-
-    // let mut app = App {
-    //     ui_state: {
-    //         let mut ui_state = UiState::default();
-    //         ui_state.set_time_frame(args.time_frame)?;
-    //         if let Some(indicator) = args.indicator {
-    //             ui_state.set_indicator(indicator)?;
-    //         }
-    //         ui_state.set_debug_draw(args.debug_draw)?;
-    //         ui_state
-    //     },
-    //     stock: Stock {
-    //         bars: vec![],
-    //         profile: None,
-    //         quote: None,
-    //         symbol: args.symbol,
-    //     },
-    // };
-
-    // // Draw early to show an unpopulated UI before data is loaded
-    // terminal.draw(|mut f| {
-    //     ui::draw(&mut f, &app).expect("Draw failed");
-    // })?;
-
-    // app.load_stock(&app.stock.symbol.clone()).await?;
 
     // loop {
     //     match event_stream.next().await {
