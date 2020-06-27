@@ -1,14 +1,18 @@
 use crate::{event::InputEvent, reactive::StreamExt, stock::Stock, widgets::SelectMenuState};
 use chrono::{DateTime, Duration, Utc};
 use crossterm::event::{KeyCode, KeyEvent};
-use derive_more::{Display, From, FromStr, Into};
+use derive_more::{Display, From, Into};
+use derive_new::new;
 use math::round;
+use once_cell::sync::Lazy;
 use parking_lot::RwLock;
 use reactive_rs::{Broadcast, Stream};
+use regex::Regex;
 use shrinkwraprs::Shrinkwrap;
 use std::{
     cell::RefCell,
     fmt,
+    marker::PhantomData,
     num::ParseIntError,
     ops::Range,
     rc::Rc,
@@ -19,6 +23,7 @@ use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use thiserror::Error;
 use tui::layout::{Margin, Rect};
+use typenum::{Unsigned, U2, U20, U50};
 use yahoo_finance::Interval;
 
 pub struct App<'r> {
@@ -33,8 +38,8 @@ pub struct UiState<'r> {
     pub date_range: Option<DateRange>,
     // debug_draw: bool,
     // pub frame_rate_counter: FrameRateCounter,
-    // pub indicator: Option<Indicator>,
-    // pub indicator_menu_state: RwLock<SelectMenuState<Indicator>>,
+    pub indicator: Option<Indicator>,
+    pub indicator_menu_state: Rc<RefCell<SelectMenuState<Indicator>>>,
     pub stock_symbol_input_state: InputState,
     pub time_frame: TimeFrame,
     pub time_frame_menu_state: Rc<RefCell<SelectMenuState<TimeFrame>>>,
@@ -108,13 +113,13 @@ impl<'r> Default for UiState<'r> {
             date_range: None,
             // debug_draw: false,
             // frame_rate_counter: FrameRateCounter::new(Duration::milliseconds(1_000)),
-            // indicator: None,
-            // indicator_menu_state: RwLock::new({
-            //     let mut menu_state = SelectMenuState::new(Indicator::iter());
-            //     menu_state.allow_empty_selection = true;
-            //     menu_state.select_nth(0).unwrap();
-            //     menu_state
-            // }),
+            indicator: None,
+            indicator_menu_state: Rc::new(RefCell::new({
+                let mut menu_state = SelectMenuState::new(Indicator::iter());
+                menu_state.allow_empty_selection = true;
+                menu_state.select_nth(0).unwrap();
+                menu_state
+            })),
             stock_symbol_input_state: InputState::default(),
             time_frame: TimeFrame::default(),
             time_frame_menu_state: Rc::new(RefCell::new({
@@ -308,21 +313,62 @@ impl FrameRateCounter {
 
 #[derive(Clone, Copy, Debug, EnumIter, Eq, PartialEq)]
 pub enum Indicator {
-    BollingerBands,
-    ExponentialMovingAverage(Period),
+    BollingerBands(Period<U20>, StdDevMultiplier<U2>),
+    ExponentialMovingAverage(Period<U50>),
     // MovingAverageConvergenceDivergence,
     // RelativeStrengthIndex,
-    SimpleMovingAverage(Period),
+    SimpleMovingAverage(Period<U50>),
 }
 
 #[derive(
-    Clone, Copy, Debug, Display, Eq, From, FromStr, Into, Ord, PartialEq, PartialOrd, Shrinkwrap,
+    Clone, Copy, Debug, Display, Eq, From, Into, new, Ord, PartialEq, PartialOrd, Shrinkwrap,
 )]
-pub struct Period(u16);
+#[display(fmt = "{}", _0)]
+pub struct Period<D: Unsigned>(#[shrinkwrap(main_field)] u16, PhantomData<*const D>);
 
-impl Default for Period {
+impl<D> Default for Period<D>
+where
+    D: Unsigned,
+{
     fn default() -> Self {
-        Period(50)
+        Self::new(D::to_u16())
+    }
+}
+
+impl<D> FromStr for Period<D>
+where
+    D: Unsigned,
+{
+    type Err = <u16 as FromStr>::Err;
+
+    fn from_str(src: &str) -> Result<Self, Self::Err> {
+        Ok(Self::new(u16::from_str(src)?))
+    }
+}
+
+#[derive(
+    Clone, Copy, Debug, Display, Eq, From, Into, new, Ord, PartialEq, PartialOrd, Shrinkwrap,
+)]
+#[display(fmt = "{}", _0)]
+pub struct StdDevMultiplier<D: Unsigned>(#[shrinkwrap(main_field)] u8, PhantomData<*const D>);
+
+impl<D> Default for StdDevMultiplier<D>
+where
+    D: Unsigned,
+{
+    fn default() -> Self {
+        Self::new(D::to_u8())
+    }
+}
+
+impl<D> FromStr for StdDevMultiplier<D>
+where
+    D: Unsigned,
+{
+    type Err = <u8 as FromStr>::Err;
+
+    fn from_str(src: &str) -> Result<Self, Self::Err> {
+        Ok(Self::new(u8::from_str(src)?))
     }
 }
 
@@ -330,30 +376,48 @@ impl FromStr for Indicator {
     type Err = ParseIndicatorError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "BB" => Ok(Self::BollingerBands),
-            s if s.starts_with("EMA") => {
-                let period = &s[3..];
-                let period = period.parse().map_err(|err| ParseIndicatorError::Parse {
-                    period: period.to_owned(),
-                    source: err,
-                })?;
+        const BB_PATTERN: &str = r"BB\s*\(\s*(?P<n>\d+)\s*,\s*(?P<k>\d+)\s*\)";
+        const EMA_PATTERN: &str = r"EMA\s*\(\s*(?P<n>\d+)\s*\)";
+        const SMA_PATTERN: &str = r"SMA\s*\(\s*(?P<n>\d+)\s*\)";
 
-                Ok(Self::ExponentialMovingAverage(period))
-            }
-            // "MACD" => Ok(Self::MovingAverageConvergenceDivergence),
-            // "RSI" => Ok(Self::RelativeStrengthIndex),
-            s if s.starts_with("SMA") => {
-                let period = &s[3..];
-                let period = period.parse().map_err(|err| ParseIndicatorError::Parse {
-                    period: period.to_owned(),
-                    source: err,
-                })?;
+        static BB_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(BB_PATTERN).unwrap());
+        static EMA_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(EMA_PATTERN).unwrap());
+        static SMA_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(SMA_PATTERN).unwrap());
 
-                Ok(Self::SimpleMovingAverage(period))
-            }
-            "" => Err(ParseIndicatorError::Empty),
-            _ => Err(ParseIndicatorError::Invalid),
+        if let Some(caps) = BB_REGEX.captures(s) {
+            let n = &caps["n"];
+            let n = n.parse().map_err(|err| ParseIndicatorError::ParseInt {
+                name: "n".to_owned(),
+                source: err,
+                value: n.to_owned(),
+            })?;
+            let k = &caps["k"];
+            let k = k.parse().map_err(|err| ParseIndicatorError::ParseInt {
+                name: "k".to_owned(),
+                source: err,
+                value: k.to_owned(),
+            })?;
+            Ok(Indicator::BollingerBands(n, k))
+        } else if let Some(caps) = EMA_REGEX.captures(s) {
+            let n = &caps["n"];
+            let n = n.parse().map_err(|err| ParseIndicatorError::ParseInt {
+                name: "n".to_owned(),
+                source: err,
+                value: n.to_owned(),
+            })?;
+            Ok(Indicator::ExponentialMovingAverage(n))
+        } else if let Some(caps) = SMA_REGEX.captures(s) {
+            let n = &caps["n"];
+            let n = n.parse().map_err(|err| ParseIndicatorError::ParseInt {
+                name: "n".to_owned(),
+                source: err,
+                value: n.to_owned(),
+            })?;
+            Ok(Indicator::SimpleMovingAverage(n))
+        } else if s == "" {
+            Err(ParseIndicatorError::Empty)
+        } else {
+            Err(ParseIndicatorError::Invalid)
         }
     }
 }
@@ -364,21 +428,22 @@ pub enum ParseIndicatorError {
     Empty,
     #[error("invalid indicator literal")]
     Invalid,
-    #[error("invalid indicator period: {}", .period)]
-    Parse {
-        period: String,
+    #[error("invalid indicator parameter {}: {}", .name, .value)]
+    ParseInt {
+        name: String,
         source: ParseIntError,
+        value: String,
     },
 }
 
 impl fmt::Display for Indicator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::BollingerBands => write!(f, "Bollinger Bands"),
-            Self::ExponentialMovingAverage(period) => write!(f, "EMA{}", period),
+            Self::BollingerBands(n, k) => write!(f, "BB({}, {})", n, k),
+            Self::ExponentialMovingAverage(n) => write!(f, "EMA({})", n),
             // Self::MovingAverageConvergenceDivergence => write!(f, "MACD"),
             // Self::RelativeStrengthIndex => write!(f, "RSI"),
-            Self::SimpleMovingAverage(period) => write!(f, "SMA{}", period),
+            Self::SimpleMovingAverage(n) => write!(f, "SMA({})", n),
         }
     }
 }

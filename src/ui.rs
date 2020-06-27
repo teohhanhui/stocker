@@ -3,6 +3,7 @@ use crate::{
     widgets::{SelectMenuBox, SelectMenuList},
 };
 use chrono::{Duration, TimeZone, Utc};
+use im::{hashmap, HashMap};
 use itertools::Itertools;
 use itertools::MinMaxResult::{MinMax, NoElements, OneElement};
 use math::round;
@@ -103,15 +104,15 @@ fn draw_body<B: Backend>(
     const Y_AXIS_LABEL_HEIGHT: u8 = 1;
     const Y_AXIS_LABEL_PADDING: u8 = 2;
 
-    let historical_prices_data: Vec<_> = stock
+    let mut historical_prices_data: HashMap<String, Vec<_>> = hashmap! {};
+    let stock_data = stock
         .bars
         .iter()
         .filter(|&bar| {
-            if let Some(date_range) = &ui_state.date_range {
-                date_range.contains(&bar.datetime())
-            } else {
-                true
-            }
+            ui_state
+                .date_range
+                .as_ref()
+                .map_or(true, |date_range| date_range.contains(&bar.datetime()))
         })
         .map(|bar| {
             (
@@ -120,16 +121,153 @@ fn draw_body<B: Backend>(
             )
         })
         .collect();
-    let (timestamps, prices): (Vec<_>, Vec<_>) = historical_prices_data.clone().into_iter().unzip();
+    historical_prices_data.insert(stock.symbol.clone(), stock_data);
 
-    let timestamp_steps: Vec<_> = match timestamps.clone().into_iter().minmax() {
+    let mut historical_prices_datasets = vec![];
+
+    if let Some(indicator) = ui_state.indicator {
+        let indicator_prices_data = stock.bars.iter().map(|bar| {
+            let data_item = DataItem::builder()
+                .open(bar.open)
+                .high(bar.high)
+                .low(bar.low)
+                .close(bar.close);
+            let data_item = if let Some(volume) = bar.volume {
+                data_item.volume(volume as f64)
+            } else {
+                data_item
+            };
+            let data_item = data_item.build().unwrap();
+            (bar.timestamp_seconds() as f64, data_item)
+        });
+
+        match indicator {
+            Indicator::BollingerBands(n, k) => {
+                let indicator_prices_data = indicator_prices_data.filter(|(timestamp, _)| {
+                    ui_state.date_range.as_ref().map_or(true, |date_range| {
+                        let date_range =
+                            (date_range.start - Duration::days(*n as i64 - 1))..date_range.end;
+                        date_range.contains(&Utc.timestamp(*timestamp as i64, 0))
+                    })
+                });
+                let mut bb = indicators::BollingerBands::new(*n as u32, *k as f64).unwrap();
+                let (bb_upper_data, bb_middle_data, bb_lower_data) = indicator_prices_data.fold(
+                    (vec![], vec![], vec![]),
+                    |mut acc_data, (timestamp, data_item)| {
+                        let bb_output = bb.next(&data_item);
+                        acc_data.0.push((timestamp, bb_output.upper));
+                        acc_data.1.push((timestamp, bb_output.average));
+                        acc_data.2.push((timestamp, bb_output.lower));
+                        acc_data
+                    },
+                );
+                historical_prices_data = historical_prices_data
+                    + hashmap! {
+                        "BB Upper".to_owned() => bb_upper_data,
+                        "BB Middle".to_owned() => bb_middle_data,
+                        "BB Lower".to_owned() => bb_lower_data,
+                    };
+                let bb_upper_data = historical_prices_data.get("BB Upper").unwrap();
+                let bb_middle_data = historical_prices_data.get("BB Middle").unwrap();
+                let bb_lower_data = historical_prices_data.get("BB Lower").unwrap();
+
+                historical_prices_datasets.push(
+                    Dataset::default()
+                        .marker(Marker::Braille)
+                        .style(Style::default().fg(Color::DarkGray))
+                        .graph_type(GraphType::Line)
+                        .data(&bb_upper_data),
+                );
+                historical_prices_datasets.push(
+                    Dataset::default()
+                        .marker(Marker::Braille)
+                        .style(Style::default().fg(Color::DarkGray))
+                        .graph_type(GraphType::Line)
+                        .data(&bb_lower_data),
+                );
+                historical_prices_datasets.push(
+                    Dataset::default()
+                        .marker(Marker::Braille)
+                        .style(Style::default().fg(Color::Cyan))
+                        .graph_type(GraphType::Line)
+                        .data(&bb_middle_data),
+                );
+            }
+            Indicator::ExponentialMovingAverage(n) => {
+                let indicator_prices_data = indicator_prices_data.filter(|(timestamp, _)| {
+                    ui_state.date_range.as_ref().map_or(true, |date_range| {
+                        let date_range =
+                            (date_range.start - Duration::days(*n as i64 - 1))..date_range.end;
+                        date_range.contains(&Utc.timestamp(*timestamp as i64, 0))
+                    })
+                });
+                let mut ema = indicators::ExponentialMovingAverage::new(*n as u32).unwrap();
+                let ema_data = indicator_prices_data
+                    .map(|(timestamp, data_item)| (timestamp, ema.next(&data_item)))
+                    .collect();
+                historical_prices_data.insert("EMA".to_owned(), ema_data);
+                let ema_data = historical_prices_data.get("EMA").unwrap();
+
+                historical_prices_datasets.push(
+                    Dataset::default()
+                        .marker(Marker::Braille)
+                        .style(Style::default().fg(Color::Cyan))
+                        .graph_type(GraphType::Line)
+                        .data(&ema_data),
+                );
+            }
+            Indicator::SimpleMovingAverage(n) => {
+                let indicator_prices_data = indicator_prices_data.filter(|(timestamp, _)| {
+                    ui_state.date_range.as_ref().map_or(true, |date_range| {
+                        let date_range =
+                            (date_range.start - Duration::days(*n as i64 - 1))..date_range.end;
+                        date_range.contains(&Utc.timestamp(*timestamp as i64, 0))
+                    })
+                });
+                let mut sma = indicators::SimpleMovingAverage::new(*n as u32).unwrap();
+                let sma_data = indicator_prices_data
+                    .map(|(timestamp, data_item)| (timestamp, sma.next(&data_item)))
+                    .collect();
+                historical_prices_data.insert("SMA".to_owned(), sma_data);
+                let sma_data = historical_prices_data.get("SMA").unwrap();
+
+                historical_prices_datasets.push(
+                    Dataset::default()
+                        .marker(Marker::Braille)
+                        .style(Style::default().fg(Color::Cyan))
+                        .graph_type(GraphType::Line)
+                        .data(&sma_data),
+                );
+            }
+        }
+    }
+
+    let stock_data = historical_prices_data.get(&stock.symbol).unwrap();
+    let (stock_timestamps, stock_prices): (Vec<_>, Vec<_>) = stock_data.clone().into_iter().unzip();
+
+    let historical_prices_dataset = Dataset::default()
+        .marker(Marker::Braille)
+        .style(Style::default().fg({
+            let first_price = stock_prices.first().unwrap_or(&0f64);
+            let last_price = stock_prices.last().unwrap_or(&0f64);
+            if last_price >= first_price {
+                Color::Green
+            } else {
+                Color::Red
+            }
+        }))
+        .graph_type(GraphType::Line)
+        .data(&stock_data);
+    historical_prices_datasets.push(historical_prices_dataset);
+
+    let timestamp_steps: Vec<_> = match stock_timestamps.clone().into_iter().minmax() {
         MinMax(min, max) => {
             let n = cmp::min(
                 round::floor(
                     (area.width - 2) as f64 / (X_AXIS_LABEL_WIDTH + X_AXIS_LABEL_PADDING) as f64,
                     0,
                 ) as usize,
-                timestamps.len(),
+                stock_timestamps.len(),
             );
 
             itertools_num::linspace(min, max, n).collect()
@@ -162,7 +300,8 @@ fn draw_body<B: Backend>(
         .map(|&t| Utc.timestamp(t as i64, 0).format("%Y-%m-%d").to_string())
         .collect();
 
-    let price_steps: Vec<_> = match prices.clone().into_iter().minmax() {
+    let (_, prices): (Vec<_>, Vec<_>) = historical_prices_data.values().flatten().cloned().unzip();
+    let price_steps: Vec<_> = match prices.into_iter().minmax() {
         MinMax(min, max) => {
             let n = round::floor(
                 (area.height - 2) as f64 / (Y_AXIS_LABEL_HEIGHT + Y_AXIS_LABEL_PADDING) as f64,
@@ -176,107 +315,6 @@ fn draw_body<B: Backend>(
     };
     let y_axis_bounds = [*price_steps.first().unwrap(), *price_steps.last().unwrap()];
     let y_axis_labels: Vec<_> = price_steps.iter().map(|&p| format!("{:.2}", p)).collect();
-
-    let mut historical_prices_datasets = vec![];
-
-    // let bb_data: (Vec<_>, Vec<_>, Vec<_>);
-    // let ema_data: Vec<_>;
-    // let sma_data: Vec<_>;
-    // if let Some(indicator) = ui_state.indicator {
-    //     let indicator_prices_data = stock.bars.iter().map(|bar| {
-    //         let mut data_item = DataItem::builder()
-    //             .open(bar.open)
-    //             .high(bar.high)
-    //             .low(bar.low)
-    //             .close(bar.close);
-    //         if let Some(volume) = bar.volume {
-    //             data_item = data_item.volume(volume as f64);
-    //         }
-    //         let data_item = data_item.build().unwrap();
-    //         (bar.timestamp_seconds() as f64, data_item)
-    //     });
-
-    //     match indicator {
-    //         Indicator::BollingerBands => {
-    //             let mut bb = indicators::BollingerBands::new(20, 2.0_f64).unwrap();
-    //             bb_data = indicator_prices_data.fold(
-    //                 (vec![], vec![], vec![]),
-    //                 |mut state, (timestamp, data_item)| {
-    //                     let bb_output = bb.next(&data_item);
-    //                     state.0.push((timestamp, bb_output.upper));
-    //                     state.1.push((timestamp, bb_output.average));
-    //                     state.2.push((timestamp, bb_output.lower));
-    //                     state
-    //                 },
-    //             );
-
-    //             historical_prices_datasets.push(
-    //                 Dataset::default()
-    //                     .marker(Marker::Braille)
-    //                     .style(Style::default().fg(Color::DarkGray))
-    //                     .graph_type(GraphType::Line)
-    //                     .data(&bb_data.0),
-    //             );
-    //             historical_prices_datasets.push(
-    //                 Dataset::default()
-    //                     .marker(Marker::Braille)
-    //                     .style(Style::default().fg(Color::DarkGray))
-    //                     .graph_type(GraphType::Line)
-    //                     .data(&bb_data.2),
-    //             );
-    //             historical_prices_datasets.push(
-    //                 Dataset::default()
-    //                     .marker(Marker::Braille)
-    //                     .style(Style::default().fg(Color::Cyan))
-    //                     .graph_type(GraphType::Line)
-    //                     .data(&bb_data.1),
-    //             );
-    //         }
-    //         Indicator::ExponentialMovingAverage(period) => {
-    //             let mut ema = indicators::ExponentialMovingAverage::new(*period as u32).unwrap();
-    //             ema_data = indicator_prices_data
-    //                 .map(|(timestamp, data_item)| (timestamp, ema.next(&data_item)))
-    //                 .collect();
-
-    //             historical_prices_datasets.push(
-    //                 Dataset::default()
-    //                     .marker(Marker::Braille)
-    //                     .style(Style::default().fg(Color::Cyan))
-    //                     .graph_type(GraphType::Line)
-    //                     .data(&ema_data),
-    //             );
-    //         }
-    //         Indicator::SimpleMovingAverage(period) => {
-    //             let mut sma = indicators::SimpleMovingAverage::new(*period as u32).unwrap();
-    //             sma_data = indicator_prices_data
-    //                 .map(|(timestamp, data_item)| (timestamp, sma.next(&data_item)))
-    //                 .collect();
-
-    //             historical_prices_datasets.push(
-    //                 Dataset::default()
-    //                     .marker(Marker::Braille)
-    //                     .style(Style::default().fg(Color::Cyan))
-    //                     .graph_type(GraphType::Line)
-    //                     .data(&sma_data),
-    //             );
-    //         }
-    //     }
-    // }
-
-    let historical_prices_dataset = Dataset::default()
-        .marker(Marker::Braille)
-        .style(Style::default().fg({
-            let first_price = prices.first().unwrap_or(&0f64);
-            let last_price = prices.last().unwrap_or(&0f64);
-            if last_price >= first_price {
-                Color::Green
-            } else {
-                Color::Red
-            }
-        }))
-        .graph_type(GraphType::Line)
-        .data(&historical_prices_data);
-    historical_prices_datasets.push(historical_prices_dataset);
 
     let historical_prices_chart = Chart::default()
         .block(
@@ -312,52 +350,50 @@ fn draw_footer<B: Backend>(
 
     let menu_active_base_style = Style::default().fg(Color::White).bg(Color::DarkGray);
 
-    // let indicator_box_area = {
-    //     let chunks = Layout::default()
-    //         .direction(Direction::Horizontal)
-    //         .horizontal_margin(if ui_state.indicator_menu_state.read().active {
-    //             0
-    //         } else {
-    //             1
-    //         })
-    //         .constraints(vec![Constraint::Min(0)])
-    //         .split(indicator_box_area);
-    //     chunks[0]
-    // };
+    let indicator_menu_state = ui_state.indicator_menu_state.borrow();
 
-    // let indicators_texts = vec![
-    //     Text::styled(
-    //         "Indicator: ",
-    //         if ui_state.indicator_menu_state.read().active {
-    //             menu_active_base_style
-    //         } else {
-    //             Style::default()
-    //         },
-    //     ),
-    //     Text::styled(
-    //         if let Some(indicator) = ui_state.indicator {
-    //             indicator.to_string()
-    //         } else {
-    //             "None".to_owned()
-    //         },
-    //         if ui_state.indicator_menu_state.read().active {
-    //             menu_active_base_style
-    //         } else {
-    //             Style::default()
-    //         },
-    //     ),
-    // ];
-    // let indicator_box = SelectMenuBox::new(indicators_texts.iter())
-    //     .active_style(menu_active_base_style)
-    //     .active_border_style(Style::default().fg(Color::Gray))
-    //     .alignment(Alignment::Right);
-    // f.render_stateful_widget(
-    //     indicator_box,
-    //     indicator_box_area,
-    //     &mut *ui_state.indicator_menu_state.write(),
-    // );
+    let indicator_box_area = {
+        let chunks = Layout::default()
+            .direction(Direction::Horizontal)
+            .horizontal_margin(if indicator_menu_state.active { 0 } else { 1 })
+            .constraints(vec![Constraint::Min(0)])
+            .split(indicator_box_area);
+        chunks[0]
+    };
 
-    // ui_state.set_target_area(UiTarget::IndicatorBox, indicator_box_area)?;
+    let indicators_texts = vec![
+        Text::styled(
+            "Indicator: ",
+            if indicator_menu_state.active {
+                menu_active_base_style
+            } else {
+                Style::default()
+            },
+        ),
+        Text::styled(
+            if let Some(indicator) = ui_state.indicator {
+                indicator.to_string()
+            } else {
+                "None".to_owned()
+            },
+            if indicator_menu_state.active {
+                menu_active_base_style
+            } else {
+                Style::default()
+            },
+        ),
+    ];
+    let indicator_box = SelectMenuBox::new(indicators_texts.iter())
+        .active_style(menu_active_base_style)
+        .active_border_style(Style::default().fg(Color::Gray))
+        .alignment(Alignment::Right);
+    drop(indicator_menu_state);
+    let mut indicator_menu_state = ui_state.indicator_menu_state.borrow_mut();
+    f.render_stateful_widget(indicator_box, indicator_box_area, &mut indicator_menu_state);
+
+    ui_state
+        .ui_target_areas
+        .send((UiTarget::IndicatorBox, Some(indicator_box_area)));
 
     let time_frame_menu_state = ui_state.time_frame_menu_state.borrow();
 

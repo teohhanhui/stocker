@@ -189,6 +189,8 @@ async fn main() -> anyhow::Result<()> {
     )
     .broadcast();
 
+    let indicators: Broadcast<(), Option<Indicator>> = Broadcast::new();
+
     let stock_profiles = stock::to_stock_profiles(stock_symbols.clone())
         .map(|stock_profile| Some(stock_profile.clone()))
         .broadcast();
@@ -197,6 +199,7 @@ async fn main() -> anyhow::Result<()> {
         stock_symbols.clone(),
         time_frames.clone(),
         date_ranges.clone(),
+        indicators.clone(),
     )
     .broadcast();
 
@@ -225,10 +228,15 @@ async fn main() -> anyhow::Result<()> {
         .combine_latest(date_ranges.clone(), |(time_frame, date_range)| {
             (*time_frame, date_range.clone())
         })
+        .combine_latest(
+            indicators.clone(),
+            |((time_frame, date_range), indicator)| (*time_frame, date_range.clone(), *indicator),
+        )
         .combine_latest(stock_symbol_input_states.clone(), {
             let ui_target_areas = ui_target_areas.clone();
-            move |((time_frame, date_range), stock_symbol_input_state)| UiState {
+            move |((time_frame, date_range, indicator), stock_symbol_input_state)| UiState {
                 date_range: date_range.clone(),
+                indicator: *indicator,
                 stock_symbol_input_state: stock_symbol_input_state.clone(),
                 time_frame: *time_frame,
                 ui_target_areas: ui_target_areas.clone(),
@@ -293,6 +301,7 @@ async fn main() -> anyhow::Result<()> {
                 (end_date - duration)..end_date
             })
         },
+        indicator: args.indicator,
         time_frame: args.time_frame,
         ..UiState::default()
     });
@@ -306,6 +315,7 @@ async fn main() -> anyhow::Result<()> {
         let end_date = app_start_date.date().and_hms(0, 0, 0) + Duration::days(1);
         (end_date - duration)..end_date
     }));
+    indicators.send(args.indicator);
     active_overlay_ui_targets.send(None);
     stock_symbol_input_states.send(InputState::default());
 
