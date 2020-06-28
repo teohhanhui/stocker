@@ -1,22 +1,27 @@
 use crate::{
     app::{App, Indicator, InputState, TimeFrame, UiState, UiTarget},
-    event::{InputEvent, TextFieldEvent},
+    event::{InputEvent, OverlayEvent, OverlayState, TextFieldEvent},
     reactive::StreamExt as ReactiveStreamExt,
     stock::Stock,
 };
 use argh::FromArgs;
 use async_std::stream::{self, StreamExt};
-use chrono::{Duration, Utc};
 use crossterm::{
     cursor,
     event::{Event, EventStream, KeyCode, KeyEvent},
     execute, terminal,
 };
 use im::hashmap;
+use log::debug;
 use reactive_rs::{Broadcast, Stream};
+use simplelog::{Config as LoggerConfig, LevelFilter, WriteLogger};
 use std::{
+    cell::RefCell,
+    collections::VecDeque,
+    fs::File,
     io::{self, Write},
     panic,
+    rc::Rc,
     sync::atomic::{self, AtomicBool},
     time,
 };
@@ -41,6 +46,9 @@ struct Args {
     /// indicator for technical analysis
     #[argh(option, short = 'i')]
     indicator: Option<Indicator>,
+    /// path to log file
+    #[argh(option)]
+    log_file: Option<String>,
     /// stock symbol
     #[argh(option, short = 's', default = "DEFAULT_SYMBOL.to_owned()")]
     symbol: String,
@@ -120,51 +128,130 @@ async fn main() -> anyhow::Result<()> {
 
     let args: Args = argh::from_env();
 
+    if let Some(log_file) = args.log_file {
+        WriteLogger::init(
+            LevelFilter::Debug,
+            LoggerConfig::default(),
+            File::create(log_file)?,
+        )?;
+    }
+
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::new(backend)?;
 
     setup_panic_hook();
     setup_terminal();
 
-    let app_start_date = Utc::now();
     let should_quit = AtomicBool::new(false);
 
     let ui_target_areas: Broadcast<(), (UiTarget, Option<Rect>)> = Broadcast::new();
 
-    let active_overlay_ui_targets: Broadcast<(), Option<UiTarget>> = Broadcast::new();
+    let overlay_state_queue = Rc::new(RefCell::new(VecDeque::new()));
 
-    let input_events: Broadcast<(), InputEvent> = Broadcast::new();
+    let overlay_states: Broadcast<(), (UiTarget, OverlayState)> = Broadcast::new();
 
-    // input events without ticks
-    let user_input_events = input_events
+    let grouped_overlay_states = overlay_states
         .clone()
-        .filter(|ev| !matches!(ev, InputEvent::Tick))
-        .broadcast();
-
-    let stock_symbol_text_field_map_mouse_funcs =
-        event::ui_target_areas_to_text_field_map_mouse_funcs(
-            ui_target_areas.clone(),
-            hashmap! {
-                Some(UiTarget::StockSymbol) => Some(TextFieldEvent::Toggle),
-                Some(UiTarget::StockName) => Some(TextFieldEvent::Toggle),
-                Some(UiTarget::StockSymbolInput) => None,
-                None => Some(TextFieldEvent::Cancel)
-            },
+        .group_by(
+            |(ui_target, _)| *ui_target,
+            |(_, overlay_state)| *overlay_state,
         )
         .broadcast();
 
-    let stock_symbol_text_field_events = event::input_events_to_text_field_events(
+    let active_overlays = event::to_active_overlays(overlay_states.clone()).broadcast();
+
+    let input_events: Broadcast<(), InputEvent> = Broadcast::new();
+
+    let grouped_input_events = input_events
+        .clone()
+        .group_by(|ev| !matches!(ev, InputEvent::Tick), |ev| *ev)
+        .broadcast();
+
+    let user_input_events = grouped_input_events
+        .clone()
+        .filter(|grouped| grouped.key)
+        .switch()
+        .broadcast();
+
+    let tick_input_events = grouped_input_events
+        .clone()
+        .filter(|grouped| !grouped.key)
+        .switch()
+        .broadcast();
+
+    let hotkey_overlay_map = hashmap! {
+        KeyCode::Char('i') => UiTarget::IndicatorList,
+        KeyCode::Char('s') => UiTarget::StockSymbolInput,
+        KeyCode::Char('t') => UiTarget::TimeFrameList,
+    };
+
+    let associated_overlay_map = hashmap! {
+        UiTarget::IndicatorBox => UiTarget::IndicatorList,
+        UiTarget::IndicatorList => UiTarget::IndicatorList,
+        UiTarget::StockName => UiTarget::StockSymbolInput,
+        UiTarget::StockSymbol => UiTarget::StockSymbolInput,
+        UiTarget::StockSymbolInput => UiTarget::StockSymbolInput,
+        UiTarget::TimeFrameBox => UiTarget::TimeFrameList,
+        UiTarget::TimeFrameList => UiTarget::TimeFrameList,
+    };
+
+    let grouped_user_input_events = event::to_grouped_user_input_events(
         user_input_events.clone(),
-        active_overlay_ui_targets.clone(),
+        ui_target_areas.clone(),
+        active_overlays.clone(),
+        hotkey_overlay_map,
+        associated_overlay_map,
+    )
+    .broadcast();
+
+    let non_overlay_user_input_events = grouped_user_input_events
+        .clone()
+        .filter(|grouped| grouped.key == None)
+        .switch()
+        .broadcast();
+
+    let stock_symbol_text_field_map_mouse_funcs = event::to_text_field_map_mouse_funcs(
+        ui_target_areas.clone(),
+        UiTarget::StockSymbolInput,
+        hashmap! {
+            Some(UiTarget::StockSymbol) => TextFieldEvent::Toggle,
+            Some(UiTarget::StockName) => TextFieldEvent::Toggle,
+            None => TextFieldEvent::Deactivate,
+        },
+    )
+    .broadcast();
+
+    let stock_symbol_text_field_events = event::to_text_field_events(
+        grouped_user_input_events
+            .clone()
+            .filter(|grouped| grouped.key == Some(UiTarget::StockSymbolInput))
+            .switch(),
+        grouped_overlay_states
+            .clone()
+            .filter(|grouped| grouped.key == UiTarget::StockSymbolInput)
+            .switch(),
         KeyCode::Char('s'),
         stock_symbol_text_field_map_mouse_funcs.clone(),
         |v| v.to_ascii_uppercase(),
     )
     .broadcast();
 
-    event::connect_text_field_events_to_active_overlay_ui_targets(
-        stock_symbol_text_field_events.clone(),
-        active_overlay_ui_targets.clone(),
+    let overlay_events = stock_symbol_text_field_events
+        .clone()
+        .map(|ev| {
+            (
+                UiTarget::StockSymbolInput,
+                OverlayEvent::TextField(ev.clone()),
+            )
+        })
+        .inspect(|(ui_target, ev)| {
+            debug!("overlay event: {:?}", (ui_target, ev));
+        })
+        .broadcast();
+
+    event::collect_overlay_states_for_next_tick(
+        overlay_events.clone(),
+        overlay_state_queue.clone(),
     );
 
     let stock_symbols = stock_symbol_text_field_events
@@ -182,10 +269,10 @@ async fn main() -> anyhow::Result<()> {
     let time_frames: Broadcast<(), TimeFrame> = Broadcast::new();
 
     let date_ranges = app::to_date_ranges(
-        user_input_events.clone(),
+        non_overlay_user_input_events.clone(),
         stock_symbols.clone(),
         time_frames.clone(),
-        active_overlay_ui_targets.clone(),
+        active_overlays.clone(),
     )
     .broadcast();
 
@@ -220,8 +307,7 @@ async fn main() -> anyhow::Result<()> {
         .broadcast();
 
     let stock_symbol_input_states =
-        event::text_field_events_to_input_states(stock_symbol_text_field_events.clone())
-            .broadcast();
+        event::to_text_field_states(stock_symbol_text_field_events.clone()).broadcast();
 
     let ui_states = time_frames
         .clone()
@@ -245,18 +331,19 @@ async fn main() -> anyhow::Result<()> {
         })
         .broadcast();
 
-    input_events
+    tick_input_events
         .clone()
+        .merge(non_overlay_user_input_events.clone())
         .with_latest_from(stocks.clone(), |(ev, stock)| (*ev, stock.clone()))
         .with_latest_from(ui_states.clone(), |((ev, stock), ui_state)| {
             (*ev, stock.clone(), ui_state.clone())
         })
         .subscribe(|(ev, stock, ui_state)| match ev {
             InputEvent::Key(KeyEvent { code, .. }) => match code {
-                KeyCode::Char('q') if !ui_state.stock_symbol_input_state.active => {
+                KeyCode::Char('q') => {
                     should_quit.store(true, atomic::Ordering::Relaxed);
                 }
-                KeyCode::Char(_) if !ui_state.stock_symbol_input_state.active => {
+                KeyCode::Char(_) => {
                     execute!(terminal.backend_mut(), crossterm::style::Print("\x07"),).unwrap();
                 }
                 _ => {}
@@ -295,12 +382,7 @@ async fn main() -> anyhow::Result<()> {
         ..Stock::default()
     });
     ui_states.send(UiState {
-        date_range: {
-            args.time_frame.duration().map(|duration| {
-                let end_date = app_start_date.date().and_hms(0, 0, 0) + Duration::days(1);
-                (end_date - duration)..end_date
-            })
-        },
+        date_range: args.time_frame.now_date_range(),
         indicator: args.indicator,
         time_frame: args.time_frame,
         ..UiState::default()
@@ -308,18 +390,25 @@ async fn main() -> anyhow::Result<()> {
     input_events.send(InputEvent::Tick);
 
     // send the initial values
-    stock_symbols.send(args.symbol);
-    stock_profiles.send(None);
+    date_ranges.send(args.time_frame.now_date_range());
     time_frames.send(args.time_frame);
-    date_ranges.send(args.time_frame.duration().map(|duration| {
-        let end_date = app_start_date.date().and_hms(0, 0, 0) + Duration::days(1);
-        (end_date - duration)..end_date
-    }));
     indicators.send(args.indicator);
-    active_overlay_ui_targets.send(None);
+    stock_symbols.send(args.symbol);
     stock_symbol_input_states.send(InputState::default());
+    active_overlays.send(None);
+    overlay_states.feed(
+        vec![
+            (UiTarget::StockSymbolInput, OverlayState::default()),
+            (UiTarget::TimeFrameList, OverlayState::default()),
+            (UiTarget::IndicatorList, OverlayState::default()),
+        ]
+        .iter(),
+    );
 
     while !should_quit.load(atomic::Ordering::Relaxed) {
+        for (ui_target, overlay_state) in overlay_state_queue.borrow_mut().drain(..) {
+            overlay_states.send((ui_target, overlay_state));
+        }
         input_events.send(input_event_stream.next().await.unwrap());
     }
 

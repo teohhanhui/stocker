@@ -1,5 +1,7 @@
+use derivative::Derivative;
+use im::{hashmap, HashMap};
 use reactive_rs::{Broadcast, Stream};
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, hash::Hash, rc::Rc};
 
 pub trait StreamExt<'a>: Stream<'a> {
     fn buffer(self, count: usize) -> Buffer<Self, Self::Item>
@@ -22,8 +24,8 @@ pub trait StreamExt<'a>: Stream<'a> {
         U: Stream<'a>,
         F: 'a + FnMut(&(Self::Item, U::Item)) -> T,
         Self::Item: 'a + Clone + Sized,
-        U::Item: 'a + Clone + Sized,
         Self::Context: 'a + Clone + Sized,
+        U::Item: 'a + Clone + Sized,
     {
         CombineLatest {
             buf_a: Rc::new(RefCell::new(None)),
@@ -43,6 +45,42 @@ pub trait StreamExt<'a>: Stream<'a> {
             buf: Rc::new(RefCell::new(None)),
             stream: self,
         }
+    }
+
+    fn group_by<F, G, K, V>(
+        self,
+        key_func: F,
+        value_func: G,
+    ) -> GroupBy<'a, Self, NoContext<F>, NoContext<G>, K, V, Self::Context>
+    where
+        F: 'a + FnMut(&Self::Item) -> K,
+        G: 'a + FnMut(&Self::Item) -> V,
+        Self::Item: 'a + Clone + Sized,
+        Self::Context: 'a + Sized,
+    {
+        GroupBy {
+            key_func: NoContext(key_func),
+            key_grouped_map: Rc::new(RefCell::new(hashmap! {})),
+            stream: self,
+            value_func: NoContext(value_func),
+        }
+    }
+
+    fn merge<U>(self, other: U) -> Merge<Self, U>
+    where
+        U: Stream<'a, Item = Self::Item, Context = Self::Context>,
+    {
+        Merge {
+            stream_a: self,
+            stream_b: other,
+        }
+    }
+
+    fn switch(self) -> Switch<Self>
+    where
+        Self::Item: Stream<'a>,
+    {
+        Switch { stream: self }
     }
 
     fn with_latest_from<U, F, T>(
@@ -85,18 +123,18 @@ where
     where
         O: 'a + FnMut(&Self::Context, &Self::Item),
     {
-        let buf = self.buf.clone();
-        let count = self.count;
-        self.stream.subscribe_ctx(move |ctx, x| {
-            let full = {
-                let mut buf = buf.borrow_mut();
-                buf.push(x.clone());
-                buf.len() == count
-            };
-            if full {
-                observer(ctx, &buf.borrow()[..]);
-                let mut buf = buf.borrow_mut();
-                buf.clear();
+        self.stream.subscribe_ctx({
+            let buf = self.buf;
+            let count = self.count;
+            move |ctx, x| {
+                let full = {
+                    buf.borrow_mut().push(x.clone());
+                    buf.borrow().len() == count
+                };
+                if full {
+                    observer(ctx, &buf.borrow()[..]);
+                    buf.borrow_mut().clear();
+                }
             }
         });
     }
@@ -127,37 +165,45 @@ where
     where
         O: 'a + FnMut(&Self::Context, &Self::Item),
     {
-        let buf_a = self.buf_a.clone();
-        let buf_b = self.buf_b.clone();
-        let buf_ctx = self.buf_ctx.clone();
-        let mut func = self.func;
         let sink: Broadcast<C, (A, B)> = Broadcast::new();
-        sink.clone().subscribe_ctx(move |ctx, x| {
-            observer(ctx, &func.call_mut(ctx, x));
+        sink.clone().subscribe_ctx({
+            let mut func = self.func;
+            move |ctx, x| {
+                observer(ctx, &func.call_mut(ctx, x));
+            }
         });
         self.stream_a.subscribe_ctx({
-            let buf_a = buf_a.clone();
-            let buf_b = buf_b.clone();
-            let buf_ctx = buf_ctx.clone();
+            let buf_a = self.buf_a.clone();
+            let buf_b = self.buf_b.clone();
+            let buf_ctx = self.buf_ctx.clone();
             let sink = sink.clone();
             move |ctx, a| {
-                if let Some(b) = &*buf_b.borrow() {
-                    sink.send_ctx(ctx, &(a.clone(), b.clone()));
+                buf_a.borrow_mut().replace(a.clone());
+                buf_ctx.borrow_mut().replace(ctx.clone());
+                let buf_b = buf_b.borrow();
+                if let Some(b) = buf_b.as_ref() {
+                    let b = b.clone();
+                    drop(buf_b);
+                    sink.send_ctx(ctx, &(a.clone(), b));
                 }
-                let mut buf_a = buf_a.borrow_mut();
-                buf_a.replace(a.clone());
-                let mut buf_ctx = buf_ctx.borrow_mut();
-                buf_ctx.replace(ctx.clone());
             }
         });
-        self.stream_b.subscribe(move |b| {
-            if let Some(a) = &*buf_a.borrow() {
-                let buf_ctx = &*buf_ctx.borrow();
-                let ctx = buf_ctx.as_ref().unwrap();
-                sink.send_ctx(ctx, &(a.clone(), b.clone()));
+        self.stream_b.subscribe({
+            let buf_a = self.buf_a;
+            let buf_b = self.buf_b;
+            let buf_ctx = self.buf_ctx;
+            move |b| {
+                buf_b.borrow_mut().replace(b.clone());
+                let buf_a = buf_a.borrow();
+                if let Some(a) = buf_a.as_ref() {
+                    let a = a.clone();
+                    let buf_ctx = buf_ctx.borrow();
+                    let ctx = buf_ctx.as_ref().cloned().unwrap();
+                    drop(buf_a);
+                    drop(buf_ctx);
+                    sink.send_ctx(&ctx, &(a, b.clone()));
+                }
             }
-            let mut buf_b = buf_b.borrow_mut();
-            buf_b.replace(b.clone());
         });
     }
 }
@@ -179,13 +225,150 @@ where
     where
         O: 'a + FnMut(&Self::Context, &Self::Item),
     {
-        let buf = self.buf.clone();
-        self.stream.subscribe_ctx(move |ctx, x| {
-            if !matches!(&*buf.borrow(), Some(y) if x == y) {
-                observer(ctx, x);
-                let mut buf = buf.borrow_mut();
-                buf.replace(x.clone());
+        self.stream.subscribe_ctx({
+            let buf = self.buf;
+            move |ctx, x| {
+                if !matches!(&*buf.borrow(), Some(y) if x == y) {
+                    buf.borrow_mut().replace(x.clone());
+                    observer(ctx, x);
+                }
             }
+        });
+    }
+}
+
+pub struct GroupBy<'a, S, F, G, K: Sized, V: Sized, C> {
+    key_func: F,
+    #[allow(clippy::type_complexity)]
+    key_grouped_map: Rc<RefCell<HashMap<K, Grouped<'a, K, V, C>>>>,
+    stream: S,
+    value_func: G,
+}
+
+impl<'a, S, F, G, K, V, T, C> Stream<'a> for GroupBy<'a, S, F, G, K, V, C>
+where
+    S: Stream<'a, Item = T, Context = C>,
+    F: 'a + ContextFn<C, T, Output = K>,
+    G: 'a + ContextFn<C, T, Output = V>,
+    K: 'a + Clone + Eq + Hash,
+    V: 'a,
+    C: 'a,
+{
+    type Context = C;
+    type Item = Grouped<'a, K, V, C>;
+
+    fn subscribe_ctx<O>(self, mut observer: O)
+    where
+        O: 'a + FnMut(&Self::Context, &Self::Item),
+    {
+        self.stream.subscribe_ctx({
+            let mut key_func = self.key_func;
+            let key_grouped_map = self.key_grouped_map;
+            let mut value_func = self.value_func;
+            move |ctx, x| {
+                let key = key_func.call_mut(ctx, x);
+                let mut key_grouped_map = key_grouped_map.borrow_mut();
+                let grouped = key_grouped_map.entry(key.clone()).or_insert_with(|| {
+                    let grouped = Grouped {
+                        key: key.clone(),
+                        sink: Broadcast::new(),
+                    };
+                    observer(ctx, &grouped);
+                    grouped
+                });
+                grouped.sink.send_ctx(ctx, value_func.call_mut(ctx, x));
+            }
+        });
+    }
+}
+
+#[derive(Derivative)]
+#[derivative(Clone(bound = "K: Clone"))]
+pub struct Grouped<'a, K: Sized, V: 'a + Sized, C: 'a> {
+    pub key: K,
+    sink: Broadcast<'a, C, V>,
+}
+
+impl<'a, K, V, C> Stream<'a> for Grouped<'a, K, V, C>
+where
+    V: 'a,
+    C: 'a,
+{
+    type Context = C;
+    type Item = V;
+
+    fn subscribe_ctx<O>(self, observer: O)
+    where
+        O: 'a + FnMut(&Self::Context, &Self::Item),
+    {
+        self.sink.subscribe_ctx(observer);
+    }
+}
+
+pub struct Merge<S, U> {
+    stream_a: S,
+    stream_b: U,
+}
+
+impl<'a, S, U, T, C> Stream<'a> for Merge<S, U>
+where
+    S: Stream<'a, Item = T, Context = C>,
+    U: Stream<'a, Item = T, Context = C>,
+    T: 'a,
+    C: 'a,
+{
+    type Context = C;
+    type Item = T;
+
+    fn subscribe_ctx<O>(self, mut observer: O)
+    where
+        O: 'a + FnMut(&Self::Context, &Self::Item),
+    {
+        let sink = Broadcast::new();
+        sink.clone().subscribe_ctx(move |ctx, x| {
+            observer(ctx, x);
+        });
+        self.stream_a.subscribe_ctx({
+            let sink = sink.clone();
+            move |ctx, x| {
+                sink.send_ctx(ctx, x);
+            }
+        });
+        self.stream_b.subscribe_ctx(move |ctx, x| {
+            sink.send_ctx(ctx, x);
+        });
+    }
+}
+
+pub struct Switch<S> {
+    stream: S,
+}
+
+impl<'a, S, X, T, C> Stream<'a> for Switch<S>
+where
+    S: Stream<'a, Item = X>,
+    X: Clone + Stream<'a, Item = T, Context = C>,
+    T: 'a,
+    C: 'a,
+{
+    type Context = C;
+    type Item = T;
+
+    fn subscribe_ctx<O>(self, mut observer: O)
+    where
+        O: 'a + FnMut(&Self::Context, &Self::Item),
+    {
+        let sink = Broadcast::new();
+        sink.clone().subscribe_ctx(move |ctx, x| {
+            observer(ctx, x);
+        });
+        self.stream.subscribe(move |inner_stream| {
+            inner_stream.clone().subscribe_ctx({
+                let sink = sink.clone();
+                move |ctx, x| {
+                    sink.send_ctx(ctx, x);
+                }
+            });
         });
     }
 }
@@ -212,22 +395,23 @@ where
     where
         O: 'a + FnMut(&Self::Context, &Self::Item),
     {
-        let buf_b = self.buf_b.clone();
-        let mut func = self.func;
         self.stream_a.subscribe_ctx({
-            let buf_b = buf_b.clone();
+            let buf_b = self.buf_b.clone();
+            let mut func = self.func;
             move |ctx, a| {
-                if let Some(b) = {
-                    let buf_b = buf_b.borrow();
-                    buf_b.as_ref().cloned()
-                } {
+                let buf_b = buf_b.borrow();
+                if let Some(b) = buf_b.as_ref() {
+                    let b = b.clone();
+                    drop(buf_b);
                     observer(ctx, &func.call_mut(ctx, &(a.clone(), b)));
                 }
             }
         });
-        self.stream_b.subscribe(move |b| {
-            let mut buf_b = buf_b.borrow_mut();
-            buf_b.replace(b.clone());
+        self.stream_b.subscribe({
+            let buf_b = self.buf_b;
+            move |b| {
+                buf_b.borrow_mut().replace(b.clone());
+            }
         });
     }
 }

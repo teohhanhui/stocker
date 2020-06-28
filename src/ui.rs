@@ -300,7 +300,7 @@ fn draw_body<B: Backend>(
         .map(|&t| Utc.timestamp(t as i64, 0).format("%Y-%m-%d").to_string())
         .collect();
 
-    let (_, prices): (Vec<_>, Vec<_>) = historical_prices_data.values().flatten().cloned().unzip();
+    let (_, prices): (Vec<_>, Vec<_>) = historical_prices_data.values().flatten().copied().unzip();
     let price_steps: Vec<_> = match prices.into_iter().minmax() {
         MinMax(min, max) => {
             let n = round::floor(

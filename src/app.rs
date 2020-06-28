@@ -1,6 +1,7 @@
 use crate::{event::InputEvent, reactive::StreamExt, stock::Stock, widgets::SelectMenuState};
 use chrono::{DateTime, Duration, Utc};
 use crossterm::event::{KeyCode, KeyEvent};
+use derivative::Derivative;
 use derive_more::{Display, From, Into};
 use derive_new::new;
 use math::round;
@@ -26,6 +27,7 @@ use tui::layout::{Margin, Rect};
 use typenum::{Unsigned, U2, U20, U50};
 use yahoo_finance::Interval;
 
+#[derive(Clone, Debug)]
 pub struct App<'r> {
     pub stock: Stock,
     pub ui_state: UiState<'r>,
@@ -33,7 +35,8 @@ pub struct App<'r> {
 
 type DateRange = Range<DateTime<Utc>>;
 
-#[derive(Clone)]
+#[derive(Clone, Derivative)]
+#[derivative(Debug)]
 pub struct UiState<'r> {
     pub date_range: Option<DateRange>,
     // debug_draw: bool,
@@ -43,6 +46,7 @@ pub struct UiState<'r> {
     pub stock_symbol_input_state: InputState,
     pub time_frame: TimeFrame,
     pub time_frame_menu_state: Rc<RefCell<SelectMenuState<TimeFrame>>>,
+    #[derivative(Debug = "ignore")]
     pub ui_target_areas: Broadcast<'r, (), (UiTarget, Option<Rect>)>,
 }
 
@@ -110,7 +114,7 @@ impl<'r> UiState<'r> {
 impl<'r> Default for UiState<'r> {
     fn default() -> Self {
         Self {
-            date_range: None,
+            date_range: TimeFrame::default().now_date_range(),
             // debug_draw: false,
             // frame_rate_counter: FrameRateCounter::new(Duration::milliseconds(1_000)),
             indicator: None,
@@ -235,19 +239,10 @@ where
         .distinct_until_changed()
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct InputState {
     pub active: bool,
     pub value: String,
-}
-
-impl Default for InputState {
-    fn default() -> Self {
-        Self {
-            active: false,
-            value: String::new(),
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -448,9 +443,11 @@ impl fmt::Display for Indicator {
     }
 }
 
-#[derive(Clone, Copy, Debug, EnumIter, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Derivative, EnumIter, Eq, PartialEq)]
+#[derivative(Default)]
 pub enum TimeFrame {
     FiveDays,
+    #[derivative(Default)]
     OneMonth,
     ThreeMonths,
     SixMonths,
@@ -497,12 +494,6 @@ impl TimeFrame {
             let end_date = Utc::now().date().and_hms(0, 0, 0) + Duration::days(1);
             (end_date - duration)..end_date
         })
-    }
-}
-
-impl Default for TimeFrame {
-    fn default() -> Self {
-        Self::OneMonth
     }
 }
 
