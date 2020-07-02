@@ -1,5 +1,5 @@
 use crate::{event::InputEvent, reactive::StreamExt, stock::Stock, widgets::SelectMenuState};
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Datelike, Duration, Utc};
 use crossterm::event::{KeyCode, KeyEvent};
 use derivative::Derivative;
 use derive_more::{Display, From, Into};
@@ -69,46 +69,6 @@ impl<'r> UiState<'r> {
 
     //     Some((cx, cy))
     // }
-
-    // pub fn menu_index<T>(
-    //     &self,
-    //     menu_state: &SelectMenuState<T>,
-    //     menu_area: Rect,
-    //     x: u16,
-    //     y: u16,
-    // ) -> Option<usize>
-    // where
-    //     T: Clone + PartialEq + ToString,
-    // {
-    //     let border_margin = Margin {
-    //         horizontal: 1,
-    //         vertical: 1,
-    //     };
-    //     let inner_area = menu_area.inner(&border_margin);
-
-    //     if inner_area.left() <= x
-    //         && inner_area.right() >= x
-    //         && inner_area.top() <= y
-    //         && inner_area.bottom() >= y
-    //     {
-    //         if (inner_area.height as usize) < menu_state.items.len() {
-    //             todo!("not sure how to select an item from scrollable list");
-    //         }
-    //         let n: usize = (y - inner_area.top()) as usize;
-    //         let l = menu_state.items.len();
-    //         let l = if menu_state.allow_empty_selection {
-    //             l + 1
-    //         } else {
-    //             l
-    //         };
-
-    //         if n < l {
-    //             return Some(n);
-    //         }
-    //     }
-
-    //     None
-    // }
 }
 
 impl<'r> Default for UiState<'r> {
@@ -121,14 +81,14 @@ impl<'r> Default for UiState<'r> {
             indicator_menu_state: Rc::new(RefCell::new({
                 let mut menu_state = SelectMenuState::new(Indicator::iter());
                 menu_state.allow_empty_selection = true;
-                menu_state.select_nth(0).unwrap();
+                menu_state.select(None).unwrap();
                 menu_state
             })),
             stock_symbol_input_state: InputState::default(),
             time_frame: TimeFrame::default(),
             time_frame_menu_state: Rc::new(RefCell::new({
                 let mut menu_state = SelectMenuState::new(TimeFrame::iter());
-                menu_state.select(TimeFrame::default()).unwrap();
+                menu_state.select(Some(TimeFrame::default())).unwrap();
                 menu_state
             })),
             ui_target_areas: Broadcast::new(),
@@ -140,6 +100,8 @@ pub fn to_date_ranges<'a, V, S, R, U, C>(
     input_events: V,
     stock_symbols: S,
     time_frames: R,
+    init_stock_symbol: String,
+    init_time_frame: TimeFrame,
     active_overlay_ui_targets: U,
 ) -> impl Stream<'a, Item = Option<DateRange>, Context = C>
 where
@@ -170,34 +132,29 @@ where
             },
         )
         .fold(
-            (None, None, None),
-            |(acc_stock_symbol, acc_time_frame, acc_date_range): &(
-                Option<String>,
-                Option<TimeFrame>,
-                Option<DateRange>,
+            (
+                init_time_frame.now_date_range(),
+                init_stock_symbol,
+                init_time_frame,
             ),
+            |(acc_date_range, acc_stock_symbol, acc_time_frame),
              (ev, stock_symbol, time_frame, active_overlay_ui_target)| {
-                let stock_symbol_changed =
-                    acc_stock_symbol.is_some() && acc_stock_symbol.as_ref() != Some(stock_symbol);
-                let time_frame_changed =
-                    acc_time_frame.is_some() && acc_time_frame.as_ref() != Some(time_frame);
-                let acc_date_range =
-                    if acc_time_frame.is_some() && !stock_symbol_changed && !time_frame_changed {
-                        acc_date_range.clone()
-                    } else {
-                        time_frame.now_date_range()
-                    };
+                let stock_symbol_changed = acc_stock_symbol != stock_symbol;
+                let time_frame_changed = acc_time_frame != time_frame;
                 if stock_symbol_changed || time_frame_changed {
                     return (
-                        Some(stock_symbol.clone()),
-                        Some(*time_frame),
-                        acc_date_range,
+                        time_frame.now_date_range(),
+                        stock_symbol.clone(),
+                        *time_frame,
                     );
                 }
 
                 match ev {
                     InputEvent::Key(KeyEvent { code, .. }) => match code {
-                        KeyCode::Left if active_overlay_ui_target.is_none() => {
+                        KeyCode::Left
+                            if active_overlay_ui_target.is_none()
+                                && time_frame != &TimeFrame::YearToDate =>
+                        {
                             let date_range = time_frame.duration().map(|duration| {
                                 acc_date_range
                                     .as_ref()
@@ -207,9 +164,12 @@ where
                                     })
                                     .unwrap()
                             });
-                            (Some(stock_symbol.clone()), Some(*time_frame), date_range)
+                            (date_range, stock_symbol.clone(), *time_frame)
                         }
-                        KeyCode::Right if active_overlay_ui_target.is_none() => {
+                        KeyCode::Right
+                            if active_overlay_ui_target.is_none()
+                                && time_frame != &TimeFrame::YearToDate =>
+                        {
                             let date_range = time_frame.duration().map(|duration| {
                                 acc_date_range
                                     .as_ref()
@@ -227,15 +187,23 @@ where
                                     })
                                     .unwrap()
                             });
-                            (Some(stock_symbol.clone()), Some(*time_frame), date_range)
+                            (date_range, stock_symbol.clone(), *time_frame)
                         }
-                        _ => (acc_stock_symbol.clone(), *acc_time_frame, acc_date_range),
+                        _ => (
+                            acc_date_range.clone(),
+                            acc_stock_symbol.clone(),
+                            *acc_time_frame,
+                        ),
                     },
-                    _ => (acc_stock_symbol.clone(), *acc_time_frame, acc_date_range),
+                    _ => (
+                        acc_date_range.clone(),
+                        acc_stock_symbol.clone(),
+                        *acc_time_frame,
+                    ),
                 }
             },
         )
-        .map(|(_, _, date_range)| date_range.clone())
+        .map(|(date_range, ..)| date_range.clone())
         .distinct_until_changed()
 }
 
@@ -490,10 +458,14 @@ impl TimeFrame {
     }
 
     pub fn now_date_range(self) -> Option<DateRange> {
-        self.duration().map(|duration| {
-            let end_date = Utc::now().date().and_hms(0, 0, 0) + Duration::days(1);
-            (end_date - duration)..end_date
-        })
+        let end_date = Utc::now().date().and_hms(0, 0, 0) + Duration::days(1);
+
+        if self == Self::YearToDate {
+            return Some(end_date.with_ordinal(1).unwrap()..end_date);
+        }
+
+        self.duration()
+            .map(|duration| (end_date - duration)..end_date)
     }
 }
 

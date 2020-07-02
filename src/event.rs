@@ -1,7 +1,9 @@
 use crate::{
     app::{InputState, UiTarget},
     reactive::{Grouped, StreamExt},
+    widgets::SelectMenuState,
 };
+use bimap::BiMap;
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent};
 use derivative::Derivative;
 use im::{hashmap, hashmap::HashMap};
@@ -29,9 +31,9 @@ pub enum TextFieldEvent {
     Toggle,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub enum SelectMenuEvent {
-    Accept(usize),
+    Accept(Option<String>),
     Activate,
     Deactivate,
     SelectNext,
@@ -58,7 +60,7 @@ pub fn to_grouped_user_input_events<'a, S, U, R, C>(
     user_input_events: S,
     ui_target_areas: U,
     active_overlays: R,
-    hotkey_overlay_map: HashMap<KeyCode, UiTarget>,
+    hotkey_overlay_map: BiMap<KeyCode, UiTarget>,
     associated_overlay_map: HashMap<UiTarget, UiTarget>,
 ) -> impl Stream<'a, Item = Grouped<'a, Option<UiTarget>, InputEvent, C>, Context = C>
 where
@@ -95,7 +97,7 @@ where
                 InputEvent::Key(KeyEvent { code, .. }) => {
                     let overlay = match active_overlay {
                         Some(ui_target) => Some(*ui_target),
-                        None => hotkey_overlay_map.get(&code).copied(),
+                        None => hotkey_overlay_map.get_by_left(&code).copied(),
                     };
                     debug!("key press grouped into overlay: {:?}", overlay);
                     overlay
@@ -272,10 +274,267 @@ where
     })
 }
 
-/// Collects the overlay states to send on next tick.
+pub fn to_select_menu_events<'a, S, V, O, U, C>(
+    input_events: S,
+    init_select_menu_state: SelectMenuState<V>,
+    overlay_states: O,
+    activation_hotkey: KeyCode,
+    ui_target_areas: U,
+    self_ui_target: UiTarget,
+    select_menu_event_map: HashMap<Option<UiTarget>, SelectMenuEvent>,
+) -> impl Stream<'a, Item = (SelectMenuEvent, SelectMenuState<V>), Context = C>
+where
+    S: Stream<'a, Item = InputEvent, Context = C>,
+    V: 'a + Clone + PartialEq + ToString,
+    O: Stream<'a, Item = OverlayState>,
+    U: Stream<'a, Item = (UiTarget, Option<Rect>)>,
+    C: 'a + Clone,
+{
+    let select_menu_event_map = select_menu_event_map.without(&Some(self_ui_target));
+
+    let ui_target_area_bufs = ui_target_areas
+        .filter({
+            let select_menu_event_map = select_menu_event_map.clone();
+            move |(ui_target, _)| {
+                *ui_target == self_ui_target
+                    || select_menu_event_map.contains_key(&Some(*ui_target))
+            }
+        })
+        .buffer(select_menu_event_map.without(&None).len() + 1)
+        .map(move |ui_target_areas| {
+            ui_target_areas
+                .iter()
+                .filter_map(|(ui_target, area)| area.map(|area| (*ui_target, area)))
+                .rev()
+                .collect::<Vec<_>>()
+        });
+
+    input_events
+        .combine_latest(
+            overlay_states.distinct_until_changed(),
+            |(ev, overlay_state)| (*ev, *overlay_state),
+        )
+        .with_latest_from(
+            ui_target_area_bufs,
+            |((ev, overlay_state), ui_target_areas)| (*ev, *overlay_state, ui_target_areas.clone()),
+        )
+        .fold(
+            (
+                None,
+                init_select_menu_state.clone(),
+                init_select_menu_state,
+                OverlayState::default(),
+            ),
+            move |(_, acc_select_menu_state, acc_saved_select_menu_state, acc_overlay_state),
+                  (ev, overlay_state, ui_target_areas)| {
+                let noop = || {
+                    (
+                        None,
+                        acc_select_menu_state.clone(),
+                        acc_saved_select_menu_state.clone(),
+                        *overlay_state,
+                    )
+                };
+
+                let overlay_state_transitioned = acc_overlay_state != overlay_state;
+                if overlay_state_transitioned {
+                    let overlay_state_changed = match overlay_state {
+                        OverlayState::Active => !acc_select_menu_state.active,
+                        OverlayState::Inactive => acc_select_menu_state.active,
+                    };
+                    if !overlay_state_changed {
+                        return noop();
+                    }
+
+                    return match (acc_overlay_state, overlay_state) {
+                        (OverlayState::Inactive, OverlayState::Active) => (
+                            Some(SelectMenuEvent::Activate),
+                            {
+                                let mut select_menu_state = acc_saved_select_menu_state.clone();
+                                select_menu_state.active = true;
+                                select_menu_state
+                            },
+                            acc_saved_select_menu_state.clone(),
+                            *overlay_state,
+                        ),
+                        (OverlayState::Active, OverlayState::Inactive) => (
+                            Some(SelectMenuEvent::Deactivate),
+                            acc_saved_select_menu_state.clone(),
+                            acc_saved_select_menu_state.clone(),
+                            *overlay_state,
+                        ),
+                        _ => {
+                            unreachable!();
+                        }
+                    };
+                }
+
+                match ev {
+                    InputEvent::Key(KeyEvent { code, .. }) => match code {
+                        KeyCode::Enter if acc_select_menu_state.active => {
+                            let mut select_menu_state = acc_select_menu_state.clone();
+                            select_menu_state.active = false;
+                            (
+                                Some(SelectMenuEvent::Accept(
+                                    acc_select_menu_state.selected().map(|s| s.to_string()),
+                                )),
+                                select_menu_state.clone(),
+                                select_menu_state,
+                                *overlay_state,
+                            )
+                        }
+                        KeyCode::Esc if acc_select_menu_state.active => (
+                            Some(SelectMenuEvent::Deactivate),
+                            acc_saved_select_menu_state.clone(),
+                            acc_saved_select_menu_state.clone(),
+                            *overlay_state,
+                        ),
+                        KeyCode::Up if acc_select_menu_state.active => (
+                            Some(SelectMenuEvent::SelectPrev),
+                            {
+                                let mut select_menu_state = acc_select_menu_state.clone();
+                                select_menu_state.select_prev().unwrap();
+                                select_menu_state
+                            },
+                            acc_saved_select_menu_state.clone(),
+                            *overlay_state,
+                        ),
+                        KeyCode::Down if acc_select_menu_state.active => (
+                            Some(SelectMenuEvent::SelectNext),
+                            {
+                                let mut select_menu_state = acc_select_menu_state.clone();
+                                select_menu_state.select_next().unwrap();
+                                select_menu_state
+                            },
+                            acc_saved_select_menu_state.clone(),
+                            *overlay_state,
+                        ),
+                        &key_code
+                            if key_code == activation_hotkey && !acc_select_menu_state.active =>
+                        {
+                            (
+                                Some(SelectMenuEvent::Activate),
+                                {
+                                    let mut select_menu_state = acc_saved_select_menu_state.clone();
+                                    select_menu_state.active = true;
+                                    select_menu_state
+                                },
+                                acc_saved_select_menu_state.clone(),
+                                *overlay_state,
+                            )
+                        }
+                        // KeyCode::Char(c) if acc_select_menu_state.active => {
+                        //     todo!();
+                        // }
+                        _ => (
+                            None,
+                            acc_select_menu_state.clone(),
+                            acc_saved_select_menu_state.clone(),
+                            *overlay_state,
+                        ),
+                    },
+                    &InputEvent::Mouse(MouseEvent::Up(MouseButton::Left, x, y, _)) => {
+                        let point = (x, y);
+                        let hit = ui_target_areas.iter().find(|(_, area)| {
+                            area.left() <= x
+                                && area.right() > x
+                                && area.top() <= y
+                                && area.bottom() > y
+                        });
+
+                        match hit {
+                            Some(&(ui_target, area))
+                                if ui_target == self_ui_target && acc_select_menu_state.active =>
+                            {
+                                if let Some(n) = acc_select_menu_state.point_to_index(area, point) {
+                                    let select_menu_state = {
+                                        let mut select_menu_state = acc_select_menu_state.clone();
+                                        select_menu_state.select_nth(n).unwrap();
+                                        select_menu_state.active = false;
+                                        select_menu_state
+                                    };
+                                    (
+                                        Some(SelectMenuEvent::Accept(
+                                            select_menu_state.selected().map(|s| s.to_string()),
+                                        )),
+                                        select_menu_state.clone(),
+                                        select_menu_state,
+                                        *overlay_state,
+                                    )
+                                } else {
+                                    noop()
+                                }
+                            }
+                            _ => match select_menu_event_map
+                                .get(&hit.map(|(ui_target, _)| *ui_target))
+                            {
+                                Some(SelectMenuEvent::Activate)
+                                    if !acc_select_menu_state.active =>
+                                {
+                                    (
+                                        Some(SelectMenuEvent::Activate),
+                                        {
+                                            let mut select_menu_state =
+                                                acc_saved_select_menu_state.clone();
+                                            select_menu_state.active = true;
+                                            select_menu_state
+                                        },
+                                        acc_saved_select_menu_state.clone(),
+                                        *overlay_state,
+                                    )
+                                }
+                                Some(SelectMenuEvent::Activate) if acc_select_menu_state.active => {
+                                    noop()
+                                }
+                                Some(SelectMenuEvent::Deactivate)
+                                | Some(SelectMenuEvent::Toggle)
+                                    if acc_select_menu_state.active =>
+                                {
+                                    (
+                                        Some(SelectMenuEvent::Deactivate),
+                                        acc_saved_select_menu_state.clone(),
+                                        acc_saved_select_menu_state.clone(),
+                                        *overlay_state,
+                                    )
+                                }
+                                Some(SelectMenuEvent::Deactivate)
+                                    if !acc_select_menu_state.active =>
+                                {
+                                    noop()
+                                }
+                                Some(SelectMenuEvent::Toggle) if !acc_select_menu_state.active => (
+                                    Some(SelectMenuEvent::Activate),
+                                    {
+                                        let mut select_menu_state =
+                                            acc_saved_select_menu_state.clone();
+                                        select_menu_state.active = true;
+                                        select_menu_state
+                                    },
+                                    acc_saved_select_menu_state.clone(),
+                                    *overlay_state,
+                                ),
+                                Some(ev) => {
+                                    unimplemented!("unhandled select menu event: {:?}", ev);
+                                }
+                                None => noop(),
+                            },
+                        }
+                    }
+                    _ => noop(),
+                }
+            },
+        )
+        .filter_map(|(ev, select_menu_state, ..)| {
+            ev.as_ref()
+                .cloned()
+                .map(|ev| (ev, select_menu_state.clone()))
+        })
+}
+
+/// Queues the overlay states to send on next tick.
 ///
 /// This is necessary to prevent a cycle.
-pub fn collect_overlay_states_for_next_tick<'a, S>(
+pub fn queue_overlay_states_for_next_tick<'a, S>(
     overlay_events: S,
     overlay_state_queue: Rc<RefCell<VecDeque<(UiTarget, OverlayState)>>>,
 ) where
@@ -351,7 +610,7 @@ pub fn collect_overlay_states_for_next_tick<'a, S>(
             },
         )
         .subscribe(move |(overlay_state_changeset, ..)| {
-            for (ui_target, overlay_state) in overlay_state_changeset.iter() {
+            for (ui_target, overlay_state) in overlay_state_changeset {
                 debug!("queuing overlay state: {:?}", (ui_target, overlay_state));
                 overlay_state_queue
                     .borrow_mut()

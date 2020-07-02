@@ -441,7 +441,7 @@ fn draw_footer<B: Backend>(
 
 fn draw_overlay<B: Backend>(f: &mut Frame<B>, App { ui_state, .. }: &App) -> anyhow::Result<()> {
     let active_base_style = Style::default().fg(Color::White).bg(Color::DarkGray);
-    // let highlight_base_style = Style::default().fg(Color::Black).bg(Color::White);
+    let highlight_base_style = Style::default().fg(Color::Black).bg(Color::White);
 
     if ui_state.stock_symbol_input_state.active {
         let chunks = Layout::default()
@@ -481,81 +481,99 @@ fn draw_overlay<B: Backend>(f: &mut Frame<B>, App { ui_state, .. }: &App) -> any
             .send((UiTarget::StockSymbolInput, None));
     }
 
-    // if ui_state.indicator_menu_state.read().active {
-    //     let indicator_list_area = {
-    //         let chunks = Layout::default()
-    //             .direction(Direction::Horizontal)
-    //             .constraints(vec![
-    //                 Constraint::Min(0),
-    //                 Constraint::Length(30),
-    //                 Constraint::Length(20),
-    //             ])
-    //             .split(f.size());
-    //         let indicator_list_area = chunks[1];
-    //         let chunks = Layout::default()
-    //             .direction(Direction::Vertical)
-    //             .constraints(vec![
-    //                 Constraint::Min(0),
-    //                 Constraint::Length(cmp::min(
-    //                     Indicator::iter().count() as u16 + 1 + 2,
-    //                     indicator_list_area.height - 2,
-    //                 )),
-    //                 Constraint::Length(2),
-    //             ])
-    //             .split(indicator_list_area);
-    //         chunks[1]
-    //     };
+    let indicator_menu_state = ui_state.indicator_menu_state.borrow();
 
-    //     let indicator_menu_items = iter::once("None".to_owned())
-    //         .chain(Indicator::iter().map(|t| t.to_string()))
-    //         .map(Text::raw);
-    //     let indicator_list = SelectMenuList::new(indicator_menu_items)
-    //         .border_style(Style::default().fg(Color::Gray))
-    //         .highlight_style(highlight_base_style);
+    if indicator_menu_state.active {
+        let indicator_list_area = {
+            let chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints(vec![
+                    Constraint::Min(0),
+                    Constraint::Length(30),
+                    Constraint::Length(20),
+                ])
+                .split(f.size());
+            let indicator_list_area = chunks[1];
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints(vec![
+                    Constraint::Min(0),
+                    Constraint::Length(cmp::min(
+                        Indicator::iter().count() as u16 + 1 + 2,
+                        indicator_list_area.height - 2,
+                    )),
+                    Constraint::Length(2),
+                ])
+                .split(indicator_list_area);
+            chunks[1]
+        };
 
-    //     f.render_stateful_widget(
-    //         indicator_list,
-    //         indicator_list_area,
-    //         &mut *ui_state.indicator_menu_state.write(),
-    //     );
+        let indicator_menu_items = iter::once("None".to_owned())
+            .chain(Indicator::iter().map(|t| t.to_string()))
+            .map(Text::raw);
+        let indicator_list = SelectMenuList::new(indicator_menu_items)
+            .border_style(Style::default().fg(Color::Gray))
+            .highlight_style(highlight_base_style);
+        drop(indicator_menu_state);
+        let mut indicator_menu_state = ui_state.indicator_menu_state.borrow_mut();
+        f.render_stateful_widget(
+            indicator_list,
+            indicator_list_area,
+            &mut indicator_menu_state,
+        );
 
-    //     ui_state.set_target_area(UiTarget::IndicatorList, indicator_list_area)?;
-    // }
+        ui_state
+            .ui_target_areas
+            .send((UiTarget::IndicatorList, Some(indicator_list_area)));
+    } else {
+        ui_state
+            .ui_target_areas
+            .send((UiTarget::IndicatorList, None));
+    }
 
-    // if ui_state.time_frame_menu_state.read().active {
-    //     let time_frame_list_area = {
-    //         let chunks = Layout::default()
-    //             .direction(Direction::Horizontal)
-    //             .constraints(vec![Constraint::Min(0), Constraint::Length(20)])
-    //             .split(f.size());
-    //         let time_frame_list_area = chunks[1];
-    //         let chunks = Layout::default()
-    //             .direction(Direction::Vertical)
-    //             .constraints(vec![
-    //                 Constraint::Min(0),
-    //                 Constraint::Length(cmp::min(
-    //                     TimeFrame::iter().count() as u16 + 2,
-    //                     time_frame_list_area.height - 2,
-    //                 )),
-    //                 Constraint::Length(2),
-    //             ])
-    //             .split(time_frame_list_area);
-    //         chunks[1]
-    //     };
+    let time_frame_menu_state = ui_state.time_frame_menu_state.borrow();
 
-    //     let time_frame_menu_items = TimeFrame::iter().map(|t| Text::raw(t.to_string()));
-    //     let time_frame_list = SelectMenuList::new(time_frame_menu_items)
-    //         .border_style(Style::default().fg(Color::Gray))
-    //         .highlight_style(highlight_base_style);
+    if time_frame_menu_state.active {
+        let time_frame_list_area = {
+            let chunks = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints(vec![Constraint::Min(0), Constraint::Length(20)])
+                .split(f.size());
+            let time_frame_list_area = chunks[1];
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints(vec![
+                    Constraint::Min(0),
+                    Constraint::Length(cmp::min(
+                        TimeFrame::iter().count() as u16 + 2,
+                        time_frame_list_area.height - 2,
+                    )),
+                    Constraint::Length(2),
+                ])
+                .split(time_frame_list_area);
+            chunks[1]
+        };
 
-    //     f.render_stateful_widget(
-    //         time_frame_list,
-    //         time_frame_list_area,
-    //         &mut *ui_state.time_frame_menu_state.write(),
-    //     );
+        let time_frame_menu_items = TimeFrame::iter().map(|t| Text::raw(t.to_string()));
+        let time_frame_list = SelectMenuList::new(time_frame_menu_items)
+            .border_style(Style::default().fg(Color::Gray))
+            .highlight_style(highlight_base_style);
+        drop(time_frame_menu_state);
+        let mut time_frame_menu_state = ui_state.time_frame_menu_state.borrow_mut();
+        f.render_stateful_widget(
+            time_frame_list,
+            time_frame_list_area,
+            &mut time_frame_menu_state,
+        );
 
-    //     ui_state.set_target_area(UiTarget::TimeFrameList, time_frame_list_area)?;
-    // }
+        ui_state
+            .ui_target_areas
+            .send((UiTarget::TimeFrameList, Some(time_frame_list_area)));
+    } else {
+        ui_state
+            .ui_target_areas
+            .send((UiTarget::TimeFrameList, None));
+    }
 
     Ok(())
 }

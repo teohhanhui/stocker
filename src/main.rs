@@ -1,11 +1,13 @@
 use crate::{
     app::{App, Indicator, InputState, TimeFrame, UiState, UiTarget},
-    event::{InputEvent, OverlayEvent, OverlayState, TextFieldEvent},
+    event::{InputEvent, OverlayEvent, OverlayState, SelectMenuEvent, TextFieldEvent},
     reactive::StreamExt as ReactiveStreamExt,
     stock::Stock,
+    widgets::SelectMenuState,
 };
 use argh::FromArgs;
 use async_std::stream::{self, StreamExt};
+use bimap::BiMap;
 use crossterm::{
     cursor,
     event::{Event, EventStream, KeyCode, KeyEvent},
@@ -25,6 +27,7 @@ use std::{
     sync::atomic::{self, AtomicBool},
     time,
 };
+use strum::IntoEnumIterator;
 use tui::{backend::CrosstermBackend, layout::Rect, Terminal};
 
 mod app;
@@ -179,11 +182,10 @@ async fn main() -> anyhow::Result<()> {
         .switch()
         .broadcast();
 
-    let hotkey_overlay_map = hashmap! {
-        KeyCode::Char('i') => UiTarget::IndicatorList,
-        KeyCode::Char('s') => UiTarget::StockSymbolInput,
-        KeyCode::Char('t') => UiTarget::TimeFrameList,
-    };
+    let mut hotkey_overlay_map = BiMap::new();
+    hotkey_overlay_map.insert(KeyCode::Char('i'), UiTarget::IndicatorList);
+    hotkey_overlay_map.insert(KeyCode::Char('s'), UiTarget::StockSymbolInput);
+    hotkey_overlay_map.insert(KeyCode::Char('t'), UiTarget::TimeFrameList);
 
     let associated_overlay_map = hashmap! {
         UiTarget::IndicatorBox => UiTarget::IndicatorList,
@@ -199,7 +201,7 @@ async fn main() -> anyhow::Result<()> {
         user_input_events.clone(),
         ui_target_areas.clone(),
         active_overlays.clone(),
-        hotkey_overlay_map,
+        hotkey_overlay_map.clone(),
         associated_overlay_map,
     )
     .broadcast();
@@ -230,9 +232,71 @@ async fn main() -> anyhow::Result<()> {
             .clone()
             .filter(|grouped| grouped.key == UiTarget::StockSymbolInput)
             .switch(),
-        KeyCode::Char('s'),
+        hotkey_overlay_map
+            .get_by_right(&UiTarget::StockSymbolInput)
+            .copied()
+            .unwrap(),
         stock_symbol_text_field_map_mouse_funcs.clone(),
         |v| v.to_ascii_uppercase(),
+    )
+    .broadcast();
+
+    let init_time_frame_select_menu_state = {
+        let mut select_menu_state = SelectMenuState::new(TimeFrame::iter());
+        select_menu_state.select(Some(args.time_frame))?;
+        select_menu_state
+    };
+
+    let time_frame_select_menu_events = event::to_select_menu_events(
+        grouped_user_input_events
+            .clone()
+            .filter(|grouped| grouped.key == Some(UiTarget::TimeFrameList))
+            .switch(),
+        init_time_frame_select_menu_state.clone(),
+        grouped_overlay_states
+            .clone()
+            .filter(|grouped| grouped.key == UiTarget::TimeFrameList)
+            .switch(),
+        hotkey_overlay_map
+            .get_by_right(&UiTarget::TimeFrameList)
+            .copied()
+            .unwrap(),
+        ui_target_areas.clone(),
+        UiTarget::TimeFrameList,
+        hashmap! {
+            Some(UiTarget::TimeFrameBox) => SelectMenuEvent::Toggle,
+            None => SelectMenuEvent::Deactivate,
+        },
+    )
+    .broadcast();
+
+    let init_indicator_select_menu_state = {
+        let mut select_menu_state = SelectMenuState::new(Indicator::iter());
+        select_menu_state.allow_empty_selection = true;
+        select_menu_state.select(args.indicator)?;
+        select_menu_state
+    };
+
+    let indicator_select_menu_events = event::to_select_menu_events(
+        grouped_user_input_events
+            .clone()
+            .filter(|grouped| grouped.key == Some(UiTarget::IndicatorList))
+            .switch(),
+        init_indicator_select_menu_state.clone(),
+        grouped_overlay_states
+            .clone()
+            .filter(|grouped| grouped.key == UiTarget::IndicatorList)
+            .switch(),
+        hotkey_overlay_map
+            .get_by_right(&UiTarget::IndicatorList)
+            .copied()
+            .unwrap(),
+        ui_target_areas.clone(),
+        UiTarget::IndicatorList,
+        hashmap! {
+            Some(UiTarget::IndicatorBox) => SelectMenuEvent::Toggle,
+            None => SelectMenuEvent::Deactivate,
+        },
     )
     .broadcast();
 
@@ -244,15 +308,24 @@ async fn main() -> anyhow::Result<()> {
                 OverlayEvent::TextField(ev.clone()),
             )
         })
+        .merge(time_frame_select_menu_events.clone().map(|(ev, ..)| {
+            (
+                UiTarget::TimeFrameList,
+                OverlayEvent::SelectMenu(ev.clone()),
+            )
+        }))
+        .merge(indicator_select_menu_events.clone().map(|(ev, ..)| {
+            (
+                UiTarget::IndicatorList,
+                OverlayEvent::SelectMenu(ev.clone()),
+            )
+        }))
         .inspect(|(ui_target, ev)| {
             debug!("overlay event: {:?}", (ui_target, ev));
         })
         .broadcast();
 
-    event::collect_overlay_states_for_next_tick(
-        overlay_events.clone(),
-        overlay_state_queue.clone(),
-    );
+    event::queue_overlay_states_for_next_tick(overlay_events.clone(), overlay_state_queue.clone());
 
     let stock_symbols = stock_symbol_text_field_events
         .clone()
@@ -266,17 +339,42 @@ async fn main() -> anyhow::Result<()> {
         .distinct_until_changed()
         .broadcast();
 
-    let time_frames: Broadcast<(), TimeFrame> = Broadcast::new();
+    let time_frames = time_frame_select_menu_events
+        .clone()
+        .fold(args.time_frame, |acc_time_frame, (ev, ..)| {
+            if let SelectMenuEvent::Accept(time_frame) = ev {
+                time_frame.as_ref().unwrap().parse().unwrap()
+            } else {
+                *acc_time_frame
+            }
+        })
+        .distinct_until_changed()
+        .inspect(|time_frame| {
+            debug!("selected time frame: {:?}", time_frame);
+        })
+        .broadcast();
 
     let date_ranges = app::to_date_ranges(
         non_overlay_user_input_events.clone(),
         stock_symbols.clone(),
         time_frames.clone(),
+        args.symbol.clone(),
+        args.time_frame,
         active_overlays.clone(),
     )
     .broadcast();
 
-    let indicators: Broadcast<(), Option<Indicator>> = Broadcast::new();
+    let indicators = indicator_select_menu_events
+        .clone()
+        .fold(args.indicator, |acc_indicator, (ev, ..)| {
+            if let SelectMenuEvent::Accept(indicator) = ev {
+                indicator.as_ref().map(|s| s.parse().unwrap())
+            } else {
+                *acc_indicator
+            }
+        })
+        .distinct_until_changed()
+        .broadcast();
 
     let stock_profiles = stock::to_stock_profiles(stock_symbols.clone())
         .map(|stock_profile| Some(stock_profile.clone()))
@@ -309,6 +407,25 @@ async fn main() -> anyhow::Result<()> {
     let stock_symbol_input_states =
         event::to_text_field_states(stock_symbol_text_field_events.clone()).broadcast();
 
+    let time_frame_select_menu_states = time_frame_select_menu_events
+        .clone()
+        .map(|(_, select_menu_state)| select_menu_state.clone())
+        .broadcast();
+
+    let indicator_select_menu_states = indicator_select_menu_events
+        .clone()
+        .map(|(_, select_menu_state)| select_menu_state.clone())
+        .broadcast();
+
+    let init_ui_state = UiState {
+        date_range: args.time_frame.now_date_range(),
+        indicator: args.indicator,
+        indicator_menu_state: Rc::new(RefCell::new(init_indicator_select_menu_state.clone())),
+        time_frame: args.time_frame,
+        time_frame_menu_state: Rc::new(RefCell::new(init_time_frame_select_menu_state.clone())),
+        ..UiState::default()
+    };
+
     let ui_states = time_frames
         .clone()
         .combine_latest(date_ranges.clone(), |(time_frame, date_range)| {
@@ -318,15 +435,73 @@ async fn main() -> anyhow::Result<()> {
             indicators.clone(),
             |((time_frame, date_range), indicator)| (*time_frame, date_range.clone(), *indicator),
         )
-        .combine_latest(stock_symbol_input_states.clone(), {
+        .combine_latest(
+            stock_symbol_input_states.clone(),
+            |((time_frame, date_range, indicator), stock_symbol_input_state)| {
+                (
+                    *time_frame,
+                    date_range.clone(),
+                    *indicator,
+                    stock_symbol_input_state.clone(),
+                )
+            },
+        )
+        .combine_latest(
+            time_frame_select_menu_states.clone(),
+            |(
+                (time_frame, date_range, indicator, stock_symbol_input_state),
+                time_frame_select_menu_state,
+            )| {
+                (
+                    *time_frame,
+                    date_range.clone(),
+                    *indicator,
+                    stock_symbol_input_state.clone(),
+                    time_frame_select_menu_state.clone(),
+                )
+            },
+        )
+        .combine_latest(
+            indicator_select_menu_states.clone(),
+            |(
+                (
+                    time_frame,
+                    date_range,
+                    indicator,
+                    stock_symbol_input_state,
+                    time_frame_select_menu_state,
+                ),
+                indicator_select_menu_state,
+            )| {
+                (
+                    *time_frame,
+                    date_range.clone(),
+                    *indicator,
+                    stock_symbol_input_state.clone(),
+                    time_frame_select_menu_state.clone(),
+                    indicator_select_menu_state.clone(),
+                )
+            },
+        )
+        .fold(init_ui_state.clone(), {
             let ui_target_areas = ui_target_areas.clone();
-            move |((time_frame, date_range, indicator), stock_symbol_input_state)| UiState {
+            move |acc_ui_state,
+                  (
+                time_frame,
+                date_range,
+                indicator,
+                stock_symbol_input_state,
+                time_frame_select_menu_state,
+                indicator_select_menu_state,
+            )| UiState {
                 date_range: date_range.clone(),
                 indicator: *indicator,
+                indicator_menu_state: Rc::new(RefCell::new(indicator_select_menu_state.clone())),
                 stock_symbol_input_state: stock_symbol_input_state.clone(),
                 time_frame: *time_frame,
+                time_frame_menu_state: Rc::new(RefCell::new(time_frame_select_menu_state.clone())),
                 ui_target_areas: ui_target_areas.clone(),
-                ..UiState::default()
+                ..acc_ui_state.clone()
             }
         })
         .broadcast();
@@ -381,12 +556,7 @@ async fn main() -> anyhow::Result<()> {
         symbol: args.symbol.clone(),
         ..Stock::default()
     });
-    ui_states.send(UiState {
-        date_range: args.time_frame.now_date_range(),
-        indicator: args.indicator,
-        time_frame: args.time_frame,
-        ..UiState::default()
-    });
+    ui_states.send(init_ui_state);
     input_events.send(InputEvent::Tick);
 
     // send the initial values
@@ -395,6 +565,8 @@ async fn main() -> anyhow::Result<()> {
     indicators.send(args.indicator);
     stock_symbols.send(args.symbol);
     stock_symbol_input_states.send(InputState::default());
+    time_frame_select_menu_states.send(init_time_frame_select_menu_state);
+    indicator_select_menu_states.send(init_indicator_select_menu_state);
     active_overlays.send(None);
     overlay_states.feed(
         vec![
@@ -406,300 +578,17 @@ async fn main() -> anyhow::Result<()> {
     );
 
     while !should_quit.load(atomic::Ordering::Relaxed) {
-        for (ui_target, overlay_state) in overlay_state_queue.borrow_mut().drain(..) {
+        let drained_overlay_states: VecDeque<_> =
+            overlay_state_queue.borrow_mut().drain(..).collect();
+        for (ui_target, overlay_state) in drained_overlay_states {
+            debug!(
+                "sending previously queued overlay state: {:?}",
+                (ui_target, overlay_state)
+            );
             overlay_states.send((ui_target, overlay_state));
         }
         input_events.send(input_event_stream.next().await.unwrap());
     }
-
-    // loop {
-    //     match event_stream.next().await {
-    //         InputEvent::Key(KeyEvent { code, .. }) => match code {
-    //             KeyCode::Backspace if app.ui_state.stock_symbol_input_state.active => {
-    //                 app.ui_state.stock_symbol_input_state.value.pop();
-    //             }
-    //             KeyCode::Enter if app.ui_state.indicator_menu_state.read().active => {
-    //                 if let Some(selected_indicator) = {
-    //                     let indicator_menu_state = app.ui_state.indicator_menu_state.read();
-    //                     indicator_menu_state.selected()
-    //                 } {
-    //                     app.ui_state.set_indicator(selected_indicator)?;
-    //                 } else {
-    //                     app.ui_state.clear_indicator()?;
-    //                 }
-
-    //                 app.ui_state.indicator_menu_state.write().active = false;
-
-    //                 // TODO: load the correct date range based on indicator period
-    //                 // app.stock
-    //                 //     .load_historical_prices(
-    //                 //         app.ui_state.time_frame,
-    //                 //         app.ui_state.start_date,
-    //                 //         app.ui_state.end_date,
-    //                 //     )
-    //                 //     .await?;
-    //             }
-    //             KeyCode::Enter if app.ui_state.stock_symbol_input_state.active => {
-    //                 app.ui_state.stock_symbol_input_state.active = false;
-
-    //                 execute!(terminal.backend_mut(), cursor::DisableBlinking)?;
-
-    //                 app.load_stock(&app.ui_state.stock_symbol_input_state.value.clone())
-    //                     .await?;
-    //             }
-    //             KeyCode::Enter if app.ui_state.time_frame_menu_state.read().active => {
-    //                 let selected_time_frame = {
-    //                     let time_frame_menu_state = app.ui_state.time_frame_menu_state.read();
-    //                     time_frame_menu_state.selected().unwrap()
-    //                 };
-    //                 app.ui_state.set_time_frame(selected_time_frame)?;
-
-    //                 app.ui_state.time_frame_menu_state.write().active = false;
-
-    //                 app.stock
-    //                     .load_historical_prices(
-    //                         app.ui_state.time_frame,
-    //                         app.ui_state.start_date,
-    //                         app.ui_state.end_date,
-    //                     )
-    //                     .await?;
-    //             }
-    //             KeyCode::Left
-    //                 if !app.ui_state.stock_symbol_input_state.active
-    //                     && !app.ui_state.time_frame_menu_state.read().active =>
-    //             {
-    //                 if let (Some(_), Some(first_bar)) =
-    //                     (app.ui_state.time_frame.duration(), app.stock.bars.first())
-    //                 {
-    //                     app.ui_state.shift_date_range_before(first_bar.datetime())?;
-
-    //                     app.stock
-    //                         .load_historical_prices(
-    //                             app.ui_state.time_frame,
-    //                             app.ui_state.start_date,
-    //                             app.ui_state.end_date,
-    //                         )
-    //                         .await?;
-    //                 }
-    //             }
-    //             KeyCode::Right
-    //                 if !app.ui_state.stock_symbol_input_state.active
-    //                     && !app.ui_state.time_frame_menu_state.read().active =>
-    //             {
-    //                 if let (Some(_), Some(last_bar)) =
-    //                     (app.ui_state.time_frame.duration(), app.stock.bars.last())
-    //                 {
-    //                     app.ui_state.shift_date_range_after(last_bar.datetime())?;
-
-    //                     app.stock
-    //                         .load_historical_prices(
-    //                             app.ui_state.time_frame,
-    //                             app.ui_state.start_date,
-    //                             app.ui_state.end_date,
-    //                         )
-    //                         .await?;
-    //                 }
-    //             }
-    //             KeyCode::Up if app.ui_state.indicator_menu_state.read().active => {
-    //                 app.ui_state.indicator_menu_state.write().select_prev()?;
-    //             }
-    //             KeyCode::Up if app.ui_state.time_frame_menu_state.read().active => {
-    //                 app.ui_state.time_frame_menu_state.write().select_prev()?;
-    //             }
-    //             KeyCode::Down if app.ui_state.indicator_menu_state.read().active => {
-    //                 app.ui_state.indicator_menu_state.write().select_next()?;
-    //             }
-    //             KeyCode::Down if app.ui_state.time_frame_menu_state.read().active => {
-    //                 app.ui_state.time_frame_menu_state.write().select_next()?;
-    //             }
-    //             KeyCode::Char(_) if app.ui_state.indicator_menu_state.read().active => {}
-    //             KeyCode::Char(c) if app.ui_state.stock_symbol_input_state.active => {
-    //                 app.ui_state
-    //                     .stock_symbol_input_state
-    //                     .value
-    //                     .push(c.to_ascii_uppercase());
-    //             }
-    //             KeyCode::Char(_) if app.ui_state.time_frame_menu_state.read().active => {}
-    //             KeyCode::Char('i') => {
-    //                 app.ui_state.indicator_menu_state.write().active = true;
-    //                 app.ui_state.stock_symbol_input_state.active = false;
-    //                 app.ui_state.time_frame_menu_state.write().active = false;
-    //             }
-    //             KeyCode::Char('q') => {
-    //                 break;
-    //             }
-    //             KeyCode::Char('s') => {
-    //                 app.ui_state.stock_symbol_input_state.active = true;
-    //                 app.ui_state.indicator_menu_state.write().active = false;
-    //                 app.ui_state.time_frame_menu_state.write().active = false;
-    //             }
-    //             KeyCode::Char('t') => {
-    //                 app.ui_state.time_frame_menu_state.write().active = true;
-    //                 app.ui_state.stock_symbol_input_state.active = false;
-    //                 app.ui_state.indicator_menu_state.write().active = false;
-    //             }
-    //             KeyCode::Esc if app.ui_state.indicator_menu_state.read().active => {
-    //                 app.ui_state.indicator_menu_state.write().active = false;
-    //             }
-    //             KeyCode::Esc if app.ui_state.stock_symbol_input_state.active => {
-    //                 app.ui_state.stock_symbol_input_state.active = false;
-    //             }
-    //             KeyCode::Esc if app.ui_state.time_frame_menu_state.read().active => {
-    //                 app.ui_state.time_frame_menu_state.write().active = false;
-    //             }
-    //             _ => {}
-    //         },
-    //         InputEvent::Mouse(MouseEvent::Up(MouseButton::Left, col, row, _)) => {
-    //             match app.ui_state.target_area(col, row) {
-    //                 Some((UiTarget::IndicatorBox, _)) => {
-    //                     app.ui_state.indicator_menu_state.write().active = !{
-    //                         let indicator_menu_state = app.ui_state.indicator_menu_state.read();
-    //                         indicator_menu_state.active
-    //                     };
-    //                     app.ui_state.stock_symbol_input_state.active = false;
-    //                     app.ui_state.time_frame_menu_state.write().active = false;
-    //                 }
-    //                 Some((UiTarget::StockSymbol, _)) | Some((UiTarget::StockName, _)) => {
-    //                     app.ui_state.stock_symbol_input_state.active =
-    //                         !app.ui_state.stock_symbol_input_state.active;
-    //                     app.ui_state.indicator_menu_state.write().active = false;
-    //                     app.ui_state.time_frame_menu_state.write().active = false;
-    //                 }
-    //                 Some((UiTarget::TimeFrameBox, _)) => {
-    //                     app.ui_state.time_frame_menu_state.write().active = !{
-    //                         let time_frame_menu_state = app.ui_state.time_frame_menu_state.read();
-    //                         time_frame_menu_state.active
-    //                     };
-    //                     app.ui_state.indicator_menu_state.write().active = false;
-    //                     app.ui_state.stock_symbol_input_state.active = false;
-    //                 }
-    //                 Some((UiTarget::IndicatorList, area)) => {
-    //                     if let Some(n) = {
-    //                         let indicator_menu_state = app.ui_state.indicator_menu_state.read();
-    //                         app.ui_state
-    //                             .menu_index(&*indicator_menu_state, area, col, row)
-    //                     } {
-    //                         app.ui_state.indicator_menu_state.write().select_nth(n)?;
-
-    //                         // Trigger draw to highlight the selected item
-    //                         terminal.draw(|mut f| {
-    //                             ui::draw(&mut f, &app).expect("Draw failed");
-    //                         })?;
-
-    //                         if let Some(selected_indicator) = {
-    //                             let indicator_menu_state = app.ui_state.indicator_menu_state.read();
-    //                             indicator_menu_state.selected()
-    //                         } {
-    //                             app.ui_state.set_indicator(selected_indicator)?;
-    //                         } else {
-    //                             app.ui_state.clear_indicator()?;
-    //                         }
-
-    //                         app.ui_state.indicator_menu_state.write().active = false;
-
-    //                         // TODO: load the correct date range based on indicator period
-    //                         // app.stock
-    //                         //     .load_historical_prices(
-    //                         //         app.ui_state.time_frame,
-    //                         //         app.ui_state.start_date,
-    //                         //         app.ui_state.end_date,
-    //                         //     )
-    //                         //     .await?;
-    //                     }
-    //                 }
-    //                 Some((UiTarget::StockSymbolInput, _)) => {}
-    //                 Some((UiTarget::TimeFrameList, area)) => {
-    //                     if let Some(n) = {
-    //                         let time_frame_menu_state = app.ui_state.time_frame_menu_state.read();
-    //                         app.ui_state
-    //                             .menu_index(&*time_frame_menu_state, area, col, row)
-    //                     } {
-    //                         app.ui_state.time_frame_menu_state.write().select_nth(n)?;
-
-    //                         // Trigger draw to highlight the selected item
-    //                         terminal.draw(|mut f| {
-    //                             ui::draw(&mut f, &app).expect("Draw failed");
-    //                         })?;
-
-    //                         let selected_time_frame = {
-    //                             let time_frame_menu_state =
-    //                                 app.ui_state.time_frame_menu_state.read();
-    //                             time_frame_menu_state.selected().unwrap()
-    //                         };
-    //                         app.ui_state.set_time_frame(selected_time_frame)?;
-
-    //                         app.ui_state.time_frame_menu_state.write().active = false;
-
-    //                         app.stock
-    //                             .load_historical_prices(
-    //                                 app.ui_state.time_frame,
-    //                                 app.ui_state.start_date,
-    //                                 app.ui_state.end_date,
-    //                             )
-    //                             .await?;
-    //                     }
-    //                 }
-    //                 None => {
-    //                     app.ui_state.indicator_menu_state.write().active = false;
-    //                     app.ui_state.stock_symbol_input_state.active = false;
-    //                     app.ui_state.time_frame_menu_state.write().active = false;
-    //                 }
-    //             }
-    //         }
-    //         InputEvent::Mouse(_) => {}
-    //         InputEvent::Tick => {
-    //             app.ui_state.clear_target_areas()?;
-
-    //             terminal.draw(|mut f| {
-    //                 ui::draw(&mut f, &app).expect("Draw failed");
-    //             })?;
-
-    //             execute!(
-    //                 terminal.backend_mut(),
-    //                 cursor::Hide,
-    //                 cursor::MoveTo(0, 0),
-    //                 cursor::DisableBlinking
-    //             )?;
-
-    //             if app.ui_state.stock_symbol_input_state.active {
-    //                 let (cx, cy) = app
-    //                     .ui_state
-    //                     .input_cursor(
-    //                         &app.ui_state.stock_symbol_input_state,
-    //                         UiTarget::StockSymbolInput,
-    //                     )
-    //                     .unwrap();
-
-    //                 execute!(
-    //                     terminal.backend_mut(),
-    //                     cursor::Show,
-    //                     cursor::MoveTo(cx, cy),
-    //                     cursor::EnableBlinking
-    //                 )?;
-    //             }
-    //         }
-    //     };
-
-    //     if !app.ui_state.indicator_menu_state.read().active {
-    //         let mut indicator_menu_state = app.ui_state.indicator_menu_state.write();
-    //         indicator_menu_state.clear_selection()?;
-    //         if let Some(indicator) = app.ui_state.indicator {
-    //             indicator_menu_state.select(indicator).ok();
-    //         } else {
-    //             indicator_menu_state.select_nth(0)?;
-    //         }
-    //     }
-
-    //     if !app.ui_state.stock_symbol_input_state.active {
-    //         app.ui_state.stock_symbol_input_state.value.clear();
-    //     }
-
-    //     if !app.ui_state.time_frame_menu_state.read().active {
-    //         let mut time_frame_menu_state = app.ui_state.time_frame_menu_state.write();
-    //         time_frame_menu_state.clear_selection()?;
-    //         time_frame_menu_state.select(app.ui_state.time_frame)?;
-    //     }
-    // }
 
     cleanup_terminal();
 
