@@ -510,6 +510,23 @@ async fn main() -> anyhow::Result<()> {
         })
         .broadcast();
 
+    let cursor_points = stock_symbol_field_states
+        .clone()
+        .combine_latest(
+            ui_target_areas
+                .clone()
+                .filter(|(ui_target, ..)| matches!(ui_target, UiTarget::StockSymbolField)),
+            |(text_field_state, (_, area))| (text_field_state.clone(), *area),
+        )
+        .map(|(text_field_state, area)| {
+            if let Some(area) = *area {
+                text_field_state.cursor_point(area)
+            } else {
+                None
+            }
+        })
+        .broadcast();
+
     tick_input_events
         .clone()
         .merge(non_overlay_user_input_events.clone())
@@ -517,7 +534,13 @@ async fn main() -> anyhow::Result<()> {
         .with_latest_from(ui_states.clone(), |((ev, stock), ui_state)| {
             (*ev, stock.clone(), ui_state.clone())
         })
-        .subscribe(|(ev, stock, ui_state)| match ev {
+        .with_latest_from(
+            cursor_points.clone(),
+            |((ev, stock, ui_state), cursor_point)| {
+                (*ev, stock.clone(), ui_state.clone(), *cursor_point)
+            },
+        )
+        .subscribe(|(ev, stock, ui_state, cursor_point)| match ev {
             InputEvent::Key(KeyEvent { code, .. }) => match code {
                 KeyCode::Char('q') => {
                     should_quit.store(true, atomic::Ordering::Relaxed);
@@ -537,6 +560,22 @@ async fn main() -> anyhow::Result<()> {
                         ui::draw(&mut f, &app).expect("draw failed");
                     })
                     .unwrap();
+                if let Some((cx, cy)) = *cursor_point {
+                    execute!(
+                        terminal.backend_mut(),
+                        cursor::Show,
+                        cursor::EnableBlinking,
+                        cursor::MoveTo(cx, cy),
+                    )
+                    .unwrap();
+                } else {
+                    execute!(
+                        terminal.backend_mut(),
+                        cursor::Hide,
+                        cursor::DisableBlinking,
+                    )
+                    .unwrap();
+                }
             }
             _ => {}
         });
@@ -561,6 +600,7 @@ async fn main() -> anyhow::Result<()> {
         ..Stock::default()
     });
     ui_states.send(init_ui_state);
+    cursor_points.send(None);
     input_events.send(InputEvent::Tick);
 
     // send the initial values

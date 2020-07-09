@@ -1,6 +1,6 @@
 use tui::{
     buffer::Buffer,
-    layout::Rect,
+    layout::{Margin, Rect},
     style::{Color, Style},
     widgets::{self, Block, Borders, Clear, Paragraph, Text},
 };
@@ -60,4 +60,23 @@ where
 pub struct TextFieldState {
     pub active: bool,
     pub value: String,
+}
+
+impl TextFieldState {
+    pub fn cursor_point(&self, text_field_area: Rect) -> Option<(u16, u16)> {
+        if !self.active {
+            return None;
+        }
+
+        let border_margin = Margin {
+            horizontal: 1,
+            vertical: 1,
+        };
+        let inner_area = text_field_area.inner(&border_margin);
+
+        let cx = inner_area.left() + self.value.chars().count() as u16;
+        let cy = inner_area.top();
+
+        Some((cx, cy))
+    }
 }

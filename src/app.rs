@@ -28,7 +28,7 @@ use std::{
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use thiserror::Error;
-use tui::layout::{Margin, Rect};
+use tui::layout::Rect;
 use typenum::{Unsigned, U2, U20, U50};
 use yahoo_finance::Interval;
 
@@ -53,27 +53,6 @@ pub struct UiState<'r> {
     pub time_frame_menu_state: Rc<RefCell<SelectMenuState<TimeFrame>>>,
     #[derivative(Debug = "ignore")]
     pub ui_target_areas: Broadcast<'r, (), (UiTarget, Option<Rect>)>,
-}
-
-impl<'r> UiState<'r> {
-    // pub fn input_cursor(
-    //     &self,
-    //     input_state: &TextFieldState,
-    //     input_target: UiTarget,
-    // ) -> Option<(u16, u16)> {
-    //     let target_areas = self.target_areas.read();
-    //     let input_area = target_areas.get(&input_target)?;
-    //     let border_margin = Margin {
-    //         horizontal: 1,
-    //         vertical: 1,
-    //     };
-    //     let inner_area = input_area.inner(&border_margin);
-
-    //     let cx = inner_area.left() + input_state.value.chars().count() as u16;
-    //     let cy = inner_area.top();
-
-    //     Some((cx, cy))
-    // }
 }
 
 impl<'r> Default for UiState<'r> {
