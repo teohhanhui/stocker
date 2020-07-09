@@ -1,8 +1,8 @@
-use anyhow::Context;
+use anyhow::{ensure, Context};
 use std::marker::PhantomData;
 use tui::{
     buffer::Buffer,
-    layout::{Alignment, Rect},
+    layout::{Alignment, Margin, Rect},
     style::{Color, Style},
     widgets::{self, Block, Borders, Clear, List, ListState, Paragraph, Text},
 };
@@ -131,7 +131,7 @@ where
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct SelectMenuState<T>
 where
     T: Clone + PartialEq + ToString,
@@ -159,27 +159,37 @@ where
     }
 
     pub fn selected(&self) -> Option<T> {
-        let n = self.list_state.selected()?;
-        let n = if self.allow_empty_selection {
-            if n == 0 {
-                return None;
-            }
-            n - 1
-        } else {
-            n
-        };
-
-        Some(self.items[n].clone())
+        self.list_state
+            .selected()
+            .map(|n| {
+                if self.allow_empty_selection {
+                    if n == 0 {
+                        None
+                    } else {
+                        Some(n - 1)
+                    }
+                } else {
+                    Some(n)
+                }
+            })?
+            .map(|n| self.items[n].clone())
     }
 
-    pub fn select(&mut self, item: T) -> anyhow::Result<()> {
-        let n = self
-            .items
-            .iter()
-            .cloned()
-            .position(|t| t == item)
-            .map(|n| if self.allow_empty_selection { n + 1 } else { n })
-            .with_context(|| "item not found")?;
+    pub fn select(&mut self, item: Option<T>) -> anyhow::Result<()> {
+        let n = item.map_or_else(
+            || {
+                ensure!(self.allow_empty_selection, "empty selection not allowed");
+                Ok(0)
+            },
+            |item| {
+                self.items
+                    .iter()
+                    .cloned()
+                    .position(|t| t == item)
+                    .map(|n| if self.allow_empty_selection { n + 1 } else { n })
+                    .with_context(|| "item not found")
+            },
+        )?;
 
         self.select_nth(n)?;
 
@@ -226,9 +236,30 @@ where
         Ok(())
     }
 
-    pub fn clear_selection(&mut self) -> anyhow::Result<()> {
-        self.list_state.select(None);
+    pub fn point_to_index(&self, menu_area: Rect, (x, y): (u16, u16)) -> Option<usize> {
+        let border_margin = Margin {
+            horizontal: 1,
+            vertical: 1,
+        };
+        let inner_area = menu_area.inner(&border_margin);
 
-        Ok(())
+        if inner_area.left() <= x
+            && inner_area.right() >= x
+            && inner_area.top() <= y
+            && inner_area.bottom() >= y
+        {
+            if (inner_area.height as usize) < self.items.len() {
+                todo!("not sure how to select an item from scrollable list");
+            }
+            let n: usize = (y - inner_area.top()) as usize;
+            let l = self.items.len();
+            let l = if self.allow_empty_selection { l + 1 } else { l };
+
+            if n < l {
+                return Some(n);
+            }
+        }
+
+        None
     }
 }

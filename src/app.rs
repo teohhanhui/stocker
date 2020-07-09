@@ -1,14 +1,22 @@
-use crate::{stock::Stock, widgets::SelectMenuState};
-use chrono::{DateTime, Duration, Utc};
-use derive_more::{Display, From, FromStr, Into};
-use im::{ordmap, ordmap::OrdMap};
+use crate::{event::InputEvent, reactive::StreamExt, stock::Stock, widgets::SelectMenuState};
+use chrono::{DateTime, Datelike, Duration, Utc};
+use crossterm::event::{KeyCode, KeyEvent};
+use derivative::Derivative;
+use derive_more::{Display, From, Into};
+use derive_new::new;
 use math::round;
+use once_cell::sync::Lazy;
 use parking_lot::RwLock;
+use reactive_rs::{Broadcast, Stream};
+use regex::Regex;
 use shrinkwraprs::Shrinkwrap;
 use std::{
-    cmp::Ordering,
+    cell::RefCell,
     fmt,
+    marker::PhantomData,
     num::ParseIntError,
+    ops::Range,
+    rc::Rc,
     str::FromStr,
     sync::atomic::{self, AtomicU16},
 };
@@ -16,251 +24,193 @@ use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use thiserror::Error;
 use tui::layout::{Margin, Rect};
+use typenum::{Unsigned, U2, U20, U50};
 use yahoo_finance::Interval;
 
-pub struct App {
+#[derive(Clone, Debug)]
+pub struct App<'r> {
     pub stock: Stock,
-    pub ui_state: UiState,
+    pub ui_state: UiState<'r>,
 }
 
-impl App {
-    pub async fn load_stock(&mut self, symbol: &str) -> anyhow::Result<()> {
-        self.stock.symbol = symbol.to_ascii_uppercase();
+type DateRange = Range<DateTime<Utc>>;
 
-        self.ui_state.clear_date_range()?;
-
-        self.stock.load_profile().await?;
-        self.stock
-            .load_historical_prices(
-                self.ui_state.time_frame,
-                self.ui_state.start_date,
-                self.ui_state.end_date,
-            )
-            .await?;
-
-        Ok(())
-    }
-}
-
-#[derive(Debug)]
-pub struct UiState {
-    debug_draw: bool,
-    pub end_date: Option<DateTime<Utc>>,
-    pub frame_rate_counter: FrameRateCounter,
+#[derive(Clone, Derivative)]
+#[derivative(Debug)]
+pub struct UiState<'r> {
+    pub date_range: Option<DateRange>,
+    // debug_draw: bool,
+    // pub frame_rate_counter: FrameRateCounter,
     pub indicator: Option<Indicator>,
-    pub indicator_menu_state: RwLock<SelectMenuState<Indicator>>,
-    pub start_date: Option<DateTime<Utc>>,
+    pub indicator_menu_state: Rc<RefCell<SelectMenuState<Indicator>>>,
     pub stock_symbol_input_state: InputState,
-    target_areas: RwLock<OrdMap<UiTarget, Rect>>,
     pub time_frame: TimeFrame,
-    pub time_frame_menu_state: RwLock<SelectMenuState<TimeFrame>>,
+    pub time_frame_menu_state: Rc<RefCell<SelectMenuState<TimeFrame>>>,
+    #[derivative(Debug = "ignore")]
+    pub ui_target_areas: Broadcast<'r, (), (UiTarget, Option<Rect>)>,
 }
 
-impl UiState {
-    pub fn debug_draw(&self) -> bool {
-        self.debug_draw
-    }
+impl<'r> UiState<'r> {
+    // pub fn input_cursor(
+    //     &self,
+    //     input_state: &InputState,
+    //     input_target: UiTarget,
+    // ) -> Option<(u16, u16)> {
+    //     let target_areas = self.target_areas.read();
+    //     let input_area = target_areas.get(&input_target)?;
+    //     let border_margin = Margin {
+    //         horizontal: 1,
+    //         vertical: 1,
+    //     };
+    //     let inner_area = input_area.inner(&border_margin);
 
-    pub fn set_debug_draw(&mut self, debug_draw: bool) -> anyhow::Result<()> {
-        self.debug_draw = debug_draw;
+    //     let cx = inner_area.left() + input_state.value.chars().count() as u16;
+    //     let cy = inner_area.top();
 
-        Ok(())
-    }
-
-    pub fn shift_date_range_before(&mut self, dt: DateTime<Utc>) -> anyhow::Result<()> {
-        let time_frame_duration = self
-            .time_frame
-            .duration()
-            .expect("time frame has no duration");
-
-        let end_date = (dt - Duration::days(1)).date().and_hms(23, 59, 59);
-        let start_date = (end_date - time_frame_duration + Duration::days(1))
-            .date()
-            .and_hms(0, 0, 0);
-
-        self.start_date = Some(start_date);
-        self.end_date = Some(end_date);
-
-        Ok(())
-    }
-
-    pub fn shift_date_range_after(&mut self, dt: DateTime<Utc>) -> anyhow::Result<()> {
-        let time_frame_duration = self
-            .time_frame
-            .duration()
-            .expect("time frame has no duration");
-
-        let start_date = (dt + Duration::days(1)).date().and_hms(0, 0, 0);
-        let end_date = (start_date + time_frame_duration - Duration::days(1))
-            .date()
-            .and_hms(23, 59, 59);
-
-        self.start_date = Some(start_date);
-        self.end_date = Some(end_date);
-
-        if end_date > Utc::now() {
-            self.clear_date_range()?;
-        }
-
-        Ok(())
-    }
-
-    pub fn clear_date_range(&mut self) -> anyhow::Result<()> {
-        self.start_date = None;
-        self.end_date = None;
-
-        Ok(())
-    }
-
-    pub fn set_indicator(&mut self, indicator: Indicator) -> anyhow::Result<()> {
-        self.indicator = Some(indicator);
-        let mut indicator_menu_state = self.indicator_menu_state.write();
-        indicator_menu_state.clear_selection()?;
-        indicator_menu_state.select(indicator).ok();
-
-        Ok(())
-    }
-
-    pub fn clear_indicator(&mut self) -> anyhow::Result<()> {
-        self.indicator = None;
-        let mut indicator_menu_state = self.indicator_menu_state.write();
-        indicator_menu_state.clear_selection()?;
-        indicator_menu_state.select_nth(0)?;
-
-        Ok(())
-    }
-
-    pub fn input_cursor(
-        &self,
-        input_state: &InputState,
-        input_target: UiTarget,
-    ) -> Option<(u16, u16)> {
-        let target_areas = self.target_areas.read();
-        let input_area = target_areas.get(&input_target)?;
-        let border_margin = Margin {
-            horizontal: 1,
-            vertical: 1,
-        };
-        let inner_area = input_area.inner(&border_margin);
-
-        let cx = inner_area.left() + input_state.value.chars().count() as u16;
-        let cy = inner_area.top();
-
-        Some((cx, cy))
-    }
-
-    pub fn menu_index<T>(
-        &self,
-        menu_state: &SelectMenuState<T>,
-        menu_area: Rect,
-        x: u16,
-        y: u16,
-    ) -> Option<usize>
-    where
-        T: Clone + PartialEq + ToString,
-    {
-        let border_margin = Margin {
-            horizontal: 1,
-            vertical: 1,
-        };
-        let inner_area = menu_area.inner(&border_margin);
-
-        if inner_area.left() <= x
-            && inner_area.right() >= x
-            && inner_area.top() <= y
-            && inner_area.bottom() >= y
-        {
-            if (inner_area.height as usize) < menu_state.items.len() {
-                todo!("not sure how to select an item from scrollable list");
-            }
-            let n: usize = (y - inner_area.top()) as usize;
-            let l = menu_state.items.len();
-            let l = if menu_state.allow_empty_selection {
-                l + 1
-            } else {
-                l
-            };
-
-            if n < l {
-                return Some(n);
-            }
-        }
-
-        None
-    }
-
-    pub fn target_area(&self, x: u16, y: u16) -> Option<(UiTarget, Rect)> {
-        self.target_areas
-            .read()
-            .clone()
-            .into_iter()
-            .rev()
-            .find(|(_, area)| {
-                area.left() <= x && area.right() >= x && area.top() <= y && area.bottom() >= y
-            })
-    }
-
-    pub fn set_target_area(&self, target: UiTarget, area: Rect) -> anyhow::Result<()> {
-        self.target_areas.write().insert(target, area);
-
-        Ok(())
-    }
-
-    pub fn clear_target_areas(&self) -> anyhow::Result<()> {
-        self.target_areas.write().clear();
-
-        Ok(())
-    }
-
-    pub fn set_time_frame(&mut self, time_frame: TimeFrame) -> anyhow::Result<()> {
-        self.time_frame = time_frame;
-        self.time_frame_menu_state.write().select(time_frame)?;
-
-        self.clear_date_range()?;
-
-        Ok(())
-    }
+    //     Some((cx, cy))
+    // }
 }
 
-impl Default for UiState {
+impl<'r> Default for UiState<'r> {
     fn default() -> Self {
         Self {
-            debug_draw: false,
-            end_date: None,
+            date_range: TimeFrame::default().now_date_range(),
+            // debug_draw: false,
+            // frame_rate_counter: FrameRateCounter::new(Duration::milliseconds(1_000)),
             indicator: None,
-            indicator_menu_state: RwLock::new({
+            indicator_menu_state: Rc::new(RefCell::new({
                 let mut menu_state = SelectMenuState::new(Indicator::iter());
                 menu_state.allow_empty_selection = true;
-                menu_state.select_nth(0).unwrap();
+                menu_state.select(None).unwrap();
                 menu_state
-            }),
-            frame_rate_counter: FrameRateCounter::new(Duration::milliseconds(1_000)),
-            start_date: None,
+            })),
             stock_symbol_input_state: InputState::default(),
-            target_areas: RwLock::new(ordmap! {}),
             time_frame: TimeFrame::default(),
-            time_frame_menu_state: RwLock::new({
+            time_frame_menu_state: Rc::new(RefCell::new({
                 let mut menu_state = SelectMenuState::new(TimeFrame::iter());
-                menu_state.select(TimeFrame::default()).unwrap();
+                menu_state.select(Some(TimeFrame::default())).unwrap();
                 menu_state
-            }),
+            })),
+            ui_target_areas: Broadcast::new(),
         }
     }
 }
 
-#[derive(Debug)]
+pub fn to_date_ranges<'a, V, S, R, U, C>(
+    input_events: V,
+    stock_symbols: S,
+    time_frames: R,
+    init_stock_symbol: String,
+    init_time_frame: TimeFrame,
+    active_overlay_ui_targets: U,
+) -> impl Stream<'a, Item = Option<DateRange>, Context = C>
+where
+    V: Stream<'a, Item = InputEvent, Context = C>,
+    S: Stream<'a, Item = String>,
+    R: Stream<'a, Item = TimeFrame>,
+    U: Stream<'a, Item = Option<UiTarget>>,
+    C: 'a + Clone,
+{
+    input_events
+        .combine_latest(
+            stock_symbols.distinct_until_changed(),
+            |(ev, stock_symbol)| (*ev, stock_symbol.clone()),
+        )
+        .combine_latest(
+            time_frames.distinct_until_changed(),
+            |((ev, stock_symbol), time_frame)| (*ev, stock_symbol.clone(), *time_frame),
+        )
+        .with_latest_from(
+            active_overlay_ui_targets,
+            |((ev, stock_symbol, time_frame), active_overlay_ui_target)| {
+                (
+                    *ev,
+                    stock_symbol.clone(),
+                    *time_frame,
+                    *active_overlay_ui_target,
+                )
+            },
+        )
+        .fold(
+            (
+                init_time_frame.now_date_range(),
+                init_stock_symbol,
+                init_time_frame,
+            ),
+            |(acc_date_range, acc_stock_symbol, acc_time_frame),
+             (ev, stock_symbol, time_frame, active_overlay_ui_target)| {
+                let stock_symbol_changed = acc_stock_symbol != stock_symbol;
+                let time_frame_changed = acc_time_frame != time_frame;
+                if stock_symbol_changed || time_frame_changed {
+                    return (
+                        time_frame.now_date_range(),
+                        stock_symbol.clone(),
+                        *time_frame,
+                    );
+                }
+
+                match ev {
+                    InputEvent::Key(KeyEvent { code, .. }) => match code {
+                        KeyCode::Left
+                            if active_overlay_ui_target.is_none()
+                                && time_frame != &TimeFrame::YearToDate =>
+                        {
+                            let date_range = time_frame.duration().map(|duration| {
+                                acc_date_range
+                                    .as_ref()
+                                    .map(|acc_date_range| {
+                                        let end_date = acc_date_range.start;
+                                        (end_date - duration)..end_date
+                                    })
+                                    .unwrap()
+                            });
+                            (date_range, stock_symbol.clone(), *time_frame)
+                        }
+                        KeyCode::Right
+                            if active_overlay_ui_target.is_none()
+                                && time_frame != &TimeFrame::YearToDate =>
+                        {
+                            let date_range = time_frame.duration().map(|duration| {
+                                acc_date_range
+                                    .as_ref()
+                                    .map(|acc_date_range| {
+                                        let start_date = acc_date_range.end;
+                                        start_date..(start_date + duration)
+                                    })
+                                    .map(|date_range| {
+                                        let max_date_range = time_frame.now_date_range().unwrap();
+                                        if date_range.end > max_date_range.end {
+                                            max_date_range
+                                        } else {
+                                            date_range
+                                        }
+                                    })
+                                    .unwrap()
+                            });
+                            (date_range, stock_symbol.clone(), *time_frame)
+                        }
+                        _ => (
+                            acc_date_range.clone(),
+                            acc_stock_symbol.clone(),
+                            *acc_time_frame,
+                        ),
+                    },
+                    _ => (
+                        acc_date_range.clone(),
+                        acc_stock_symbol.clone(),
+                        *acc_time_frame,
+                    ),
+                }
+            },
+        )
+        .map(|(date_range, ..)| date_range.clone())
+        .distinct_until_changed()
+}
+
+#[derive(Clone, Debug, Default)]
 pub struct InputState {
     pub active: bool,
     pub value: String,
-}
-
-impl Default for InputState {
-    fn default() -> Self {
-        Self {
-            active: false,
-            value: String::new(),
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -272,37 +222,6 @@ pub enum UiTarget {
     StockSymbolInput,
     TimeFrameBox,
     TimeFrameList,
-}
-
-impl UiTarget {
-    pub fn zindex(self) -> i8 {
-        match self {
-            Self::IndicatorBox => 0,
-            Self::IndicatorList => 1,
-            Self::StockName => 0,
-            Self::StockSymbol => 0,
-            Self::StockSymbolInput => 1,
-            Self::TimeFrameBox => 0,
-            Self::TimeFrameList => 1,
-        }
-    }
-}
-
-impl Ord for UiTarget {
-    fn cmp(&self, other: &Self) -> Ordering {
-        let ordering = self.zindex().cmp(&other.zindex());
-        if ordering == Ordering::Equal {
-            (*self as isize).cmp(&(*other as isize))
-        } else {
-            ordering
-        }
-    }
-}
-
-impl PartialOrd for UiTarget {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
 }
 
 #[derive(Debug)]
@@ -357,21 +276,62 @@ impl FrameRateCounter {
 
 #[derive(Clone, Copy, Debug, EnumIter, Eq, PartialEq)]
 pub enum Indicator {
-    BollingerBands,
-    ExponentialMovingAverage(Period),
+    BollingerBands(Period<U20>, StdDevMultiplier<U2>),
+    ExponentialMovingAverage(Period<U50>),
     // MovingAverageConvergenceDivergence,
     // RelativeStrengthIndex,
-    SimpleMovingAverage(Period),
+    SimpleMovingAverage(Period<U50>),
 }
 
 #[derive(
-    Clone, Copy, Debug, Display, Eq, From, FromStr, Into, Ord, PartialEq, PartialOrd, Shrinkwrap,
+    Clone, Copy, Debug, Display, Eq, From, Into, new, Ord, PartialEq, PartialOrd, Shrinkwrap,
 )]
-pub struct Period(u16);
+#[display(fmt = "{}", _0)]
+pub struct Period<D: Unsigned>(#[shrinkwrap(main_field)] u16, PhantomData<*const D>);
 
-impl Default for Period {
+impl<D> Default for Period<D>
+where
+    D: Unsigned,
+{
     fn default() -> Self {
-        Period(50)
+        Self::new(D::to_u16())
+    }
+}
+
+impl<D> FromStr for Period<D>
+where
+    D: Unsigned,
+{
+    type Err = <u16 as FromStr>::Err;
+
+    fn from_str(src: &str) -> Result<Self, Self::Err> {
+        Ok(Self::new(u16::from_str(src)?))
+    }
+}
+
+#[derive(
+    Clone, Copy, Debug, Display, Eq, From, Into, new, Ord, PartialEq, PartialOrd, Shrinkwrap,
+)]
+#[display(fmt = "{}", _0)]
+pub struct StdDevMultiplier<D: Unsigned>(#[shrinkwrap(main_field)] u8, PhantomData<*const D>);
+
+impl<D> Default for StdDevMultiplier<D>
+where
+    D: Unsigned,
+{
+    fn default() -> Self {
+        Self::new(D::to_u8())
+    }
+}
+
+impl<D> FromStr for StdDevMultiplier<D>
+where
+    D: Unsigned,
+{
+    type Err = <u8 as FromStr>::Err;
+
+    fn from_str(src: &str) -> Result<Self, Self::Err> {
+        Ok(Self::new(u8::from_str(src)?))
     }
 }
 
@@ -379,30 +339,48 @@ impl FromStr for Indicator {
     type Err = ParseIndicatorError;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "BB" => Ok(Self::BollingerBands),
-            s if s.starts_with("EMA") => {
-                let period = &s[3..];
-                let period = period.parse().map_err(|err| ParseIndicatorError::Parse {
-                    period: period.to_owned(),
-                    source: err,
-                })?;
+        const BB_PATTERN: &str = r"BB\s*\(\s*(?P<n>\d+)\s*,\s*(?P<k>\d+)\s*\)";
+        const EMA_PATTERN: &str = r"EMA\s*\(\s*(?P<n>\d+)\s*\)";
+        const SMA_PATTERN: &str = r"SMA\s*\(\s*(?P<n>\d+)\s*\)";
 
-                Ok(Self::ExponentialMovingAverage(period))
-            }
-            // "MACD" => Ok(Self::MovingAverageConvergenceDivergence),
-            // "RSI" => Ok(Self::RelativeStrengthIndex),
-            s if s.starts_with("SMA") => {
-                let period = &s[3..];
-                let period = period.parse().map_err(|err| ParseIndicatorError::Parse {
-                    period: period.to_owned(),
-                    source: err,
-                })?;
+        static BB_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(BB_PATTERN).unwrap());
+        static EMA_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(EMA_PATTERN).unwrap());
+        static SMA_REGEX: Lazy<Regex> = Lazy::new(|| Regex::new(SMA_PATTERN).unwrap());
 
-                Ok(Self::SimpleMovingAverage(period))
-            }
-            "" => Err(ParseIndicatorError::Empty),
-            _ => Err(ParseIndicatorError::Invalid),
+        if let Some(caps) = BB_REGEX.captures(s) {
+            let n = &caps["n"];
+            let n = n.parse().map_err(|err| ParseIndicatorError::ParseInt {
+                name: "n".to_owned(),
+                source: err,
+                value: n.to_owned(),
+            })?;
+            let k = &caps["k"];
+            let k = k.parse().map_err(|err| ParseIndicatorError::ParseInt {
+                name: "k".to_owned(),
+                source: err,
+                value: k.to_owned(),
+            })?;
+            Ok(Indicator::BollingerBands(n, k))
+        } else if let Some(caps) = EMA_REGEX.captures(s) {
+            let n = &caps["n"];
+            let n = n.parse().map_err(|err| ParseIndicatorError::ParseInt {
+                name: "n".to_owned(),
+                source: err,
+                value: n.to_owned(),
+            })?;
+            Ok(Indicator::ExponentialMovingAverage(n))
+        } else if let Some(caps) = SMA_REGEX.captures(s) {
+            let n = &caps["n"];
+            let n = n.parse().map_err(|err| ParseIndicatorError::ParseInt {
+                name: "n".to_owned(),
+                source: err,
+                value: n.to_owned(),
+            })?;
+            Ok(Indicator::SimpleMovingAverage(n))
+        } else if s == "" {
+            Err(ParseIndicatorError::Empty)
+        } else {
+            Err(ParseIndicatorError::Invalid)
         }
     }
 }
@@ -413,28 +391,31 @@ pub enum ParseIndicatorError {
     Empty,
     #[error("invalid indicator literal")]
     Invalid,
-    #[error("invalid indicator period: {}", .period)]
-    Parse {
-        period: String,
+    #[error("invalid indicator parameter {}: {}", .name, .value)]
+    ParseInt {
+        name: String,
         source: ParseIntError,
+        value: String,
     },
 }
 
 impl fmt::Display for Indicator {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::BollingerBands => write!(f, "Bollinger Bands"),
-            Self::ExponentialMovingAverage(period) => write!(f, "EMA{}", period),
+            Self::BollingerBands(n, k) => write!(f, "BB({}, {})", n, k),
+            Self::ExponentialMovingAverage(n) => write!(f, "EMA({})", n),
             // Self::MovingAverageConvergenceDivergence => write!(f, "MACD"),
             // Self::RelativeStrengthIndex => write!(f, "RSI"),
-            Self::SimpleMovingAverage(period) => write!(f, "SMA{}", period),
+            Self::SimpleMovingAverage(n) => write!(f, "SMA({})", n),
         }
     }
 }
 
-#[derive(Clone, Copy, Debug, EnumIter, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Derivative, EnumIter, Eq, PartialEq)]
+#[derivative(Default)]
 pub enum TimeFrame {
     FiveDays,
+    #[derivative(Default)]
     OneMonth,
     ThreeMonths,
     SixMonths,
@@ -475,11 +456,16 @@ impl TimeFrame {
             Self::Max => Interval::_max,
         }
     }
-}
 
-impl Default for TimeFrame {
-    fn default() -> Self {
-        Self::OneMonth
+    pub fn now_date_range(self) -> Option<DateRange> {
+        let end_date = Utc::now().date().and_hms(0, 0, 0) + Duration::days(1);
+
+        if self == Self::YearToDate {
+            return Some(end_date.with_ordinal(1).unwrap()..end_date);
+        }
+
+        self.duration()
+            .map(|duration| (end_date - duration)..end_date)
     }
 }
 

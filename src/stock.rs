@@ -1,10 +1,19 @@
-use crate::app::TimeFrame;
-use chrono::{DateTime, Utc};
-use yahoo_finance::{history, Bar, Profile, Quote};
+use crate::{
+    app::{Indicator, TimeFrame},
+    reactive::StreamExt,
+};
+use chrono::{DateTime, Duration, TimeZone, Utc};
+use futures::executor;
+use gcollections::ops::{Bounded, Difference, Union};
+use im::{hashmap, ordset, HashMap, OrdSet};
+use interval::interval_set::{IntervalSet, ToIntervalSet};
+use reactive_rs::Stream;
+use std::{cell::RefCell, ops::Range, rc::Rc};
+use yahoo_finance::{history, Bar, Profile, Quote, Timestamped};
 
-#[derive(Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct Stock {
-    pub bars: Vec<Bar>,
+    pub bars: OrdSet<Bar>,
     pub profile: Option<Profile>,
     pub quote: Option<Quote>,
     pub symbol: String,
@@ -18,25 +27,218 @@ impl Stock {
             None => None,
         }
     }
+}
 
-    pub async fn load_historical_prices(
-        &mut self,
-        time_frame: TimeFrame,
-        start_date: Option<DateTime<Utc>>,
-        end_date: Option<DateTime<Utc>>,
-    ) -> anyhow::Result<()> {
-        self.bars = if let (Some(_), Some(start_date)) = (time_frame.duration(), start_date) {
-            history::retrieve_range(self.symbol.as_str(), start_date, end_date).await?
-        } else {
-            history::retrieve_interval(self.symbol.as_str(), time_frame.interval()).await?
-        };
-
-        Ok(())
+pub fn to_stock_profiles<'a, S>(stock_symbols: S) -> ToStockProfiles<S>
+where
+    S: Stream<'a, Item = String>,
+{
+    ToStockProfiles {
+        stock_profile_map: Rc::new(RefCell::new(hashmap! {})),
+        stock_symbols,
     }
+}
 
-    pub async fn load_profile(&mut self) -> anyhow::Result<()> {
-        self.profile = Some(Profile::load(self.symbol.as_str()).await?);
+pub struct ToStockProfiles<S> {
+    stock_profile_map: Rc<RefCell<HashMap<String, Profile>>>,
+    stock_symbols: S,
+}
 
-        Ok(())
+impl<'a, S> Stream<'a> for ToStockProfiles<S>
+where
+    S: Stream<'a, Item = String>,
+{
+    type Context = S::Context;
+    type Item = Profile;
+
+    fn subscribe_ctx<O>(self, mut observer: O)
+    where
+        O: 'a + FnMut(&Self::Context, &Self::Item),
+    {
+        let stock_profile_map = self.stock_profile_map.clone();
+        self.stock_symbols
+            .distinct_until_changed()
+            .subscribe_ctx(move |ctx, stock_symbol| {
+                let profile = {
+                    let stock_profile_map = stock_profile_map.borrow();
+                    stock_profile_map.get(stock_symbol).cloned()
+                };
+                let profile = profile.unwrap_or_else(|| {
+                    let profile = executor::block_on(Profile::load(stock_symbol.as_str()))
+                        .expect("profile load failed");
+                    let mut stock_profile_map = stock_profile_map.borrow_mut();
+                    stock_profile_map.insert(stock_symbol.clone(), profile.clone());
+                    profile
+                });
+
+                observer(ctx, &profile);
+            });
+    }
+}
+
+pub fn to_stock_bar_sets<'a, S, U, R, V>(
+    stock_symbols: S,
+    time_frames: U,
+    date_ranges: R,
+    indicators: V,
+) -> ToStockBarSets<S, U, R, V>
+where
+    S: Stream<'a, Item = String>,
+    U: Stream<'a, Item = TimeFrame>,
+    R: Stream<'a, Item = Option<Range<DateTime<Utc>>>>,
+    V: Stream<'a, Item = Option<Indicator>>,
+{
+    ToStockBarSets {
+        date_ranges,
+        indicators,
+        stock_bars_map: Rc::new(RefCell::new(hashmap! {})),
+        stock_symbols,
+        time_frames,
+    }
+}
+
+type DateRangeIntervalSet = IntervalSet<i64>;
+type BarCoverageHashMap = HashMap<String, (OrdSet<Bar>, DateRangeIntervalSet)>;
+
+pub struct ToStockBarSets<S, U, R, V> {
+    date_ranges: R,
+    indicators: V,
+    stock_bars_map: Rc<RefCell<BarCoverageHashMap>>,
+    stock_symbols: S,
+    time_frames: U,
+}
+
+impl<'a, S, U, R, V, C> Stream<'a> for ToStockBarSets<S, U, R, V>
+where
+    S: Stream<'a, Item = String, Context = C>,
+    U: Stream<'a, Item = TimeFrame>,
+    R: Stream<'a, Item = Option<Range<DateTime<Utc>>>>,
+    V: Stream<'a, Item = Option<Indicator>>,
+    C: 'a + Clone + Sized,
+{
+    type Context = C;
+    type Item = OrdSet<Bar>;
+
+    fn subscribe_ctx<O>(self, mut observer: O)
+    where
+        O: 'a + FnMut(&Self::Context, &Self::Item),
+    {
+        let stock_bars_map = self.stock_bars_map.clone();
+        self.stock_symbols
+            .distinct_until_changed()
+            .combine_latest(
+                self.time_frames.distinct_until_changed(),
+                |(stock_symbol, time_frame)| (stock_symbol.clone(), *time_frame),
+            )
+            .combine_latest(
+                self.date_ranges.distinct_until_changed(),
+                |((stock_symbol, time_frame), date_range)| {
+                    (stock_symbol.clone(), *time_frame, date_range.clone())
+                },
+            )
+            .combine_latest(
+                self.indicators.distinct_until_changed(),
+                |((stock_symbol, time_frame, date_range), indicator)| {
+                    (
+                        stock_symbol.clone(),
+                        *time_frame,
+                        date_range.clone(),
+                        *indicator,
+                    )
+                },
+            )
+            .subscribe_ctx(
+                move |ctx, (stock_symbol, time_frame, date_range, indicator)| {
+                    let (stock_bar_set, covered_date_ranges) = {
+                        let stock_bars_map = stock_bars_map.borrow();
+                        stock_bars_map
+                            .get(stock_symbol)
+                            .cloned()
+                            .unwrap_or((ordset![], vec![].to_interval_set()))
+                    };
+
+                    let (stock_bar_set, covered_date_ranges) = if let Some(date_range) = date_range
+                    {
+                        let uncovered_date_ranges = (
+                            date_range.start.timestamp(),
+                            (date_range.end - Duration::seconds(1)).timestamp(),
+                        )
+                            .to_interval_set();
+                        let uncovered_date_ranges = match indicator {
+                            Some(Indicator::BollingerBands(n, _)) => uncovered_date_ranges.union(
+                                &(
+                                    (date_range.start - Duration::days(**n as i64 - 1)).timestamp(),
+                                    (date_range.start - Duration::seconds(1)).timestamp(),
+                                )
+                                    .to_interval_set(),
+                            ),
+                            Some(Indicator::ExponentialMovingAverage(n)) => uncovered_date_ranges
+                                .union(
+                                    &(
+                                        (date_range.start - Duration::days(**n as i64 - 1))
+                                            .timestamp(),
+                                        (date_range.start - Duration::seconds(1)).timestamp(),
+                                    )
+                                        .to_interval_set(),
+                                ),
+                            Some(Indicator::SimpleMovingAverage(n)) => uncovered_date_ranges.union(
+                                &(
+                                    (date_range.start - Duration::days(**n as i64 - 1)).timestamp(),
+                                    (date_range.start - Duration::seconds(1)).timestamp(),
+                                )
+                                    .to_interval_set(),
+                            ),
+                            None => uncovered_date_ranges,
+                        };
+                        let uncovered_date_ranges =
+                            uncovered_date_ranges.difference(&covered_date_ranges);
+
+                        let mut covered_date_ranges = covered_date_ranges;
+                        let mut stock_bar_set = stock_bar_set;
+                        for uncovered_date_range in uncovered_date_ranges {
+                            let bars = executor::block_on(history::retrieve_range(
+                                stock_symbol.as_str(),
+                                Utc.timestamp(uncovered_date_range.lower(), 0),
+                                Some(Utc.timestamp(uncovered_date_range.upper(), 0)),
+                            ))
+                            .expect("historical prices retrieval failed");
+                            covered_date_ranges = covered_date_ranges.union(
+                                &(uncovered_date_range.lower(), uncovered_date_range.upper())
+                                    .to_interval_set(),
+                            );
+                            stock_bar_set = stock_bar_set + OrdSet::from(bars);
+                        }
+
+                        (stock_bar_set, covered_date_ranges)
+                    } else {
+                        let bars = executor::block_on(history::retrieve_interval(
+                            stock_symbol.as_str(),
+                            time_frame.interval(),
+                        ))
+                        .expect("historical prices retrieval failed");
+                        let covered_date_ranges = if let (Some(first_bar), Some(last_bar)) =
+                            (bars.first(), bars.last())
+                        {
+                            covered_date_ranges.union(
+                                &vec![(
+                                    first_bar.timestamp_seconds() as i64,
+                                    last_bar.timestamp_seconds() as i64,
+                                )]
+                                .to_interval_set(),
+                            )
+                        } else {
+                            covered_date_ranges
+                        };
+                        let stock_bar_set = stock_bar_set + OrdSet::from(bars);
+                        (stock_bar_set, covered_date_ranges)
+                    };
+
+                    observer(ctx, &stock_bar_set);
+
+                    let mut stock_bars_map = stock_bars_map.borrow_mut();
+                    stock_bars_map
+                        .insert(stock_symbol.clone(), (stock_bar_set, covered_date_ranges));
+                },
+            );
     }
 }
