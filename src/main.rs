@@ -1,9 +1,9 @@
 use crate::{
-    app::{App, Indicator, InputState, TimeFrame, UiState, UiTarget},
+    app::{App, Indicator, TimeFrame, UiState, UiTarget},
     event::{InputEvent, OverlayEvent, OverlayState, SelectMenuEvent, TextFieldEvent},
     reactive::StreamExt as ReactiveStreamExt,
     stock::Stock,
-    widgets::SelectMenuState,
+    widgets::{SelectMenuState, TextFieldState},
 };
 use argh::FromArgs;
 use async_std::stream::{self, StreamExt};
@@ -182,19 +182,22 @@ async fn main() -> anyhow::Result<()> {
         .switch()
         .broadcast();
 
-    let mut hotkey_overlay_map = BiMap::new();
-    hotkey_overlay_map.insert(KeyCode::Char('i'), UiTarget::IndicatorList);
-    hotkey_overlay_map.insert(KeyCode::Char('s'), UiTarget::StockSymbolInput);
-    hotkey_overlay_map.insert(KeyCode::Char('t'), UiTarget::TimeFrameList);
+    let hotkey_overlay_map = {
+        let mut bimap = BiMap::new();
+        bimap.insert(KeyCode::Char('i'), UiTarget::IndicatorMenu);
+        bimap.insert(KeyCode::Char('s'), UiTarget::StockSymbolField);
+        bimap.insert(KeyCode::Char('t'), UiTarget::TimeFrameMenu);
+        bimap
+    };
 
     let associated_overlay_map = hashmap! {
-        UiTarget::IndicatorBox => UiTarget::IndicatorList,
-        UiTarget::IndicatorList => UiTarget::IndicatorList,
-        UiTarget::StockName => UiTarget::StockSymbolInput,
-        UiTarget::StockSymbol => UiTarget::StockSymbolInput,
-        UiTarget::StockSymbolInput => UiTarget::StockSymbolInput,
-        UiTarget::TimeFrameBox => UiTarget::TimeFrameList,
-        UiTarget::TimeFrameList => UiTarget::TimeFrameList,
+        UiTarget::IndicatorBox => UiTarget::IndicatorMenu,
+        UiTarget::IndicatorMenu => UiTarget::IndicatorMenu,
+        UiTarget::StockNameButton => UiTarget::StockSymbolField,
+        UiTarget::StockSymbolButton => UiTarget::StockSymbolField,
+        UiTarget::StockSymbolField => UiTarget::StockSymbolField,
+        UiTarget::TimeFrameBox => UiTarget::TimeFrameMenu,
+        UiTarget::TimeFrameMenu => UiTarget::TimeFrameMenu,
     };
 
     let grouped_user_input_events = event::to_grouped_user_input_events(
@@ -212,36 +215,34 @@ async fn main() -> anyhow::Result<()> {
         .switch()
         .broadcast();
 
-    let stock_symbol_text_field_map_mouse_funcs = event::to_text_field_map_mouse_funcs(
-        ui_target_areas.clone(),
-        UiTarget::StockSymbolInput,
-        hashmap! {
-            Some(UiTarget::StockSymbol) => TextFieldEvent::Toggle,
-            Some(UiTarget::StockName) => TextFieldEvent::Toggle,
-            None => TextFieldEvent::Deactivate,
-        },
-    )
-    .broadcast();
+    let init_stock_symbol_field_state = TextFieldState::default();
 
     let stock_symbol_text_field_events = event::to_text_field_events(
         grouped_user_input_events
             .clone()
-            .filter(|grouped| grouped.key == Some(UiTarget::StockSymbolInput))
+            .filter(|grouped| grouped.key == Some(UiTarget::StockSymbolField))
             .switch(),
+        init_stock_symbol_field_state.clone(),
         grouped_overlay_states
             .clone()
-            .filter(|grouped| grouped.key == UiTarget::StockSymbolInput)
+            .filter(|grouped| grouped.key == UiTarget::StockSymbolField)
             .switch(),
         hotkey_overlay_map
-            .get_by_right(&UiTarget::StockSymbolInput)
+            .get_by_right(&UiTarget::StockSymbolField)
             .copied()
             .unwrap(),
-        stock_symbol_text_field_map_mouse_funcs.clone(),
+        ui_target_areas.clone(),
+        UiTarget::StockSymbolField,
+        hashmap! {
+            Some(UiTarget::StockSymbolButton) => TextFieldEvent::Toggle,
+            Some(UiTarget::StockNameButton) => TextFieldEvent::Toggle,
+            None => TextFieldEvent::Deactivate,
+        },
         |v| v.to_ascii_uppercase(),
     )
     .broadcast();
 
-    let init_time_frame_select_menu_state = {
+    let init_time_frame_menu_state = {
         let mut select_menu_state = SelectMenuState::new(TimeFrame::iter());
         select_menu_state.select(Some(args.time_frame))?;
         select_menu_state
@@ -250,19 +251,19 @@ async fn main() -> anyhow::Result<()> {
     let time_frame_select_menu_events = event::to_select_menu_events(
         grouped_user_input_events
             .clone()
-            .filter(|grouped| grouped.key == Some(UiTarget::TimeFrameList))
+            .filter(|grouped| grouped.key == Some(UiTarget::TimeFrameMenu))
             .switch(),
-        init_time_frame_select_menu_state.clone(),
+        init_time_frame_menu_state.clone(),
         grouped_overlay_states
             .clone()
-            .filter(|grouped| grouped.key == UiTarget::TimeFrameList)
+            .filter(|grouped| grouped.key == UiTarget::TimeFrameMenu)
             .switch(),
         hotkey_overlay_map
-            .get_by_right(&UiTarget::TimeFrameList)
+            .get_by_right(&UiTarget::TimeFrameMenu)
             .copied()
             .unwrap(),
         ui_target_areas.clone(),
-        UiTarget::TimeFrameList,
+        UiTarget::TimeFrameMenu,
         hashmap! {
             Some(UiTarget::TimeFrameBox) => SelectMenuEvent::Toggle,
             None => SelectMenuEvent::Deactivate,
@@ -270,7 +271,7 @@ async fn main() -> anyhow::Result<()> {
     )
     .broadcast();
 
-    let init_indicator_select_menu_state = {
+    let init_indicator_menu_state = {
         let mut select_menu_state = SelectMenuState::new(Indicator::iter());
         select_menu_state.allow_empty_selection = true;
         select_menu_state.select(args.indicator)?;
@@ -280,19 +281,19 @@ async fn main() -> anyhow::Result<()> {
     let indicator_select_menu_events = event::to_select_menu_events(
         grouped_user_input_events
             .clone()
-            .filter(|grouped| grouped.key == Some(UiTarget::IndicatorList))
+            .filter(|grouped| grouped.key == Some(UiTarget::IndicatorMenu))
             .switch(),
-        init_indicator_select_menu_state.clone(),
+        init_indicator_menu_state.clone(),
         grouped_overlay_states
             .clone()
-            .filter(|grouped| grouped.key == UiTarget::IndicatorList)
+            .filter(|grouped| grouped.key == UiTarget::IndicatorMenu)
             .switch(),
         hotkey_overlay_map
-            .get_by_right(&UiTarget::IndicatorList)
+            .get_by_right(&UiTarget::IndicatorMenu)
             .copied()
             .unwrap(),
         ui_target_areas.clone(),
-        UiTarget::IndicatorList,
+        UiTarget::IndicatorMenu,
         hashmap! {
             Some(UiTarget::IndicatorBox) => SelectMenuEvent::Toggle,
             None => SelectMenuEvent::Deactivate,
@@ -302,21 +303,21 @@ async fn main() -> anyhow::Result<()> {
 
     let overlay_events = stock_symbol_text_field_events
         .clone()
-        .map(|ev| {
+        .map(|(ev, ..)| {
             (
-                UiTarget::StockSymbolInput,
+                UiTarget::StockSymbolField,
                 OverlayEvent::TextField(ev.clone()),
             )
         })
         .merge(time_frame_select_menu_events.clone().map(|(ev, ..)| {
             (
-                UiTarget::TimeFrameList,
+                UiTarget::TimeFrameMenu,
                 OverlayEvent::SelectMenu(ev.clone()),
             )
         }))
         .merge(indicator_select_menu_events.clone().map(|(ev, ..)| {
             (
-                UiTarget::IndicatorList,
+                UiTarget::IndicatorMenu,
                 OverlayEvent::SelectMenu(ev.clone()),
             )
         }))
@@ -329,7 +330,7 @@ async fn main() -> anyhow::Result<()> {
 
     let stock_symbols = stock_symbol_text_field_events
         .clone()
-        .fold(args.symbol.clone(), |acc_symbol, ev| {
+        .fold(args.symbol.clone(), |acc_symbol, (ev, ..)| {
             if let TextFieldEvent::Accept(symbol) = ev {
                 symbol.clone()
             } else {
@@ -404,15 +405,17 @@ async fn main() -> anyhow::Result<()> {
         )
         .broadcast();
 
-    let stock_symbol_input_states =
-        event::to_text_field_states(stock_symbol_text_field_events.clone()).broadcast();
+    let stock_symbol_field_states = stock_symbol_text_field_events
+        .clone()
+        .map(|(_, text_field_state)| text_field_state.clone())
+        .broadcast();
 
-    let time_frame_select_menu_states = time_frame_select_menu_events
+    let time_frame_menu_states = time_frame_select_menu_events
         .clone()
         .map(|(_, select_menu_state)| select_menu_state.clone())
         .broadcast();
 
-    let indicator_select_menu_states = indicator_select_menu_events
+    let indicator_menu_states = indicator_select_menu_events
         .clone()
         .map(|(_, select_menu_state)| select_menu_state.clone())
         .broadcast();
@@ -420,9 +423,10 @@ async fn main() -> anyhow::Result<()> {
     let init_ui_state = UiState {
         date_range: args.time_frame.now_date_range(),
         indicator: args.indicator,
-        indicator_menu_state: Rc::new(RefCell::new(init_indicator_select_menu_state.clone())),
+        indicator_menu_state: Rc::new(RefCell::new(init_indicator_menu_state.clone())),
+        stock_symbol_field_state: Rc::new(RefCell::new(init_stock_symbol_field_state.clone())),
         time_frame: args.time_frame,
-        time_frame_menu_state: Rc::new(RefCell::new(init_time_frame_select_menu_state.clone())),
+        time_frame_menu_state: Rc::new(RefCell::new(init_time_frame_menu_state.clone())),
         ..UiState::default()
     };
 
@@ -436,50 +440,50 @@ async fn main() -> anyhow::Result<()> {
             |((time_frame, date_range), indicator)| (*time_frame, date_range.clone(), *indicator),
         )
         .combine_latest(
-            stock_symbol_input_states.clone(),
-            |((time_frame, date_range, indicator), stock_symbol_input_state)| {
+            stock_symbol_field_states.clone(),
+            |((time_frame, date_range, indicator), stock_symbol_field_state)| {
                 (
                     *time_frame,
                     date_range.clone(),
                     *indicator,
-                    stock_symbol_input_state.clone(),
+                    stock_symbol_field_state.clone(),
                 )
             },
         )
         .combine_latest(
-            time_frame_select_menu_states.clone(),
+            time_frame_menu_states.clone(),
             |(
-                (time_frame, date_range, indicator, stock_symbol_input_state),
-                time_frame_select_menu_state,
+                (time_frame, date_range, indicator, stock_symbol_field_state),
+                time_frame_menu_state,
             )| {
                 (
                     *time_frame,
                     date_range.clone(),
                     *indicator,
-                    stock_symbol_input_state.clone(),
-                    time_frame_select_menu_state.clone(),
+                    stock_symbol_field_state.clone(),
+                    time_frame_menu_state.clone(),
                 )
             },
         )
         .combine_latest(
-            indicator_select_menu_states.clone(),
+            indicator_menu_states.clone(),
             |(
                 (
                     time_frame,
                     date_range,
                     indicator,
-                    stock_symbol_input_state,
-                    time_frame_select_menu_state,
+                    stock_symbol_field_state,
+                    time_frame_menu_state,
                 ),
-                indicator_select_menu_state,
+                indicator_menu_state,
             )| {
                 (
                     *time_frame,
                     date_range.clone(),
                     *indicator,
-                    stock_symbol_input_state.clone(),
-                    time_frame_select_menu_state.clone(),
-                    indicator_select_menu_state.clone(),
+                    stock_symbol_field_state.clone(),
+                    time_frame_menu_state.clone(),
+                    indicator_menu_state.clone(),
                 )
             },
         )
@@ -490,16 +494,16 @@ async fn main() -> anyhow::Result<()> {
                 time_frame,
                 date_range,
                 indicator,
-                stock_symbol_input_state,
-                time_frame_select_menu_state,
-                indicator_select_menu_state,
+                stock_symbol_field_state,
+                time_frame_menu_state,
+                indicator_menu_state,
             )| UiState {
                 date_range: date_range.clone(),
                 indicator: *indicator,
-                indicator_menu_state: Rc::new(RefCell::new(indicator_select_menu_state.clone())),
-                stock_symbol_input_state: stock_symbol_input_state.clone(),
+                indicator_menu_state: Rc::new(RefCell::new(indicator_menu_state.clone())),
+                stock_symbol_field_state: Rc::new(RefCell::new(stock_symbol_field_state.clone())),
                 time_frame: *time_frame,
-                time_frame_menu_state: Rc::new(RefCell::new(time_frame_select_menu_state.clone())),
+                time_frame_menu_state: Rc::new(RefCell::new(time_frame_menu_state.clone())),
                 ui_target_areas: ui_target_areas.clone(),
                 ..acc_ui_state.clone()
             }
@@ -564,15 +568,15 @@ async fn main() -> anyhow::Result<()> {
     time_frames.send(args.time_frame);
     indicators.send(args.indicator);
     stock_symbols.send(args.symbol);
-    stock_symbol_input_states.send(InputState::default());
-    time_frame_select_menu_states.send(init_time_frame_select_menu_state);
-    indicator_select_menu_states.send(init_indicator_select_menu_state);
+    stock_symbol_field_states.send(init_stock_symbol_field_state);
+    time_frame_menu_states.send(init_time_frame_menu_state);
+    indicator_menu_states.send(init_indicator_menu_state);
     active_overlays.send(None);
     overlay_states.feed(
         vec![
-            (UiTarget::StockSymbolInput, OverlayState::default()),
-            (UiTarget::TimeFrameList, OverlayState::default()),
-            (UiTarget::IndicatorList, OverlayState::default()),
+            (UiTarget::StockSymbolField, OverlayState::default()),
+            (UiTarget::TimeFrameMenu, OverlayState::default()),
+            (UiTarget::IndicatorMenu, OverlayState::default()),
         ]
         .iter(),
     );

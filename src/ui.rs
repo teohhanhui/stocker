@@ -1,6 +1,6 @@
 use crate::{
     app::{App, Indicator, TimeFrame, UiState, UiTarget},
-    widgets::{SelectMenuBox, SelectMenuList},
+    widgets::{SelectMenuBox, SelectMenuList, TextField},
 };
 use chrono::{Duration, TimeZone, Utc};
 use im::{hashmap, HashMap};
@@ -79,7 +79,7 @@ fn draw_header<B: Backend>(
 
     ui_state
         .ui_target_areas
-        .send((UiTarget::StockSymbol, Some(stock_symbol_area)));
+        .send((UiTarget::StockSymbolButton, Some(stock_symbol_area)));
 
     let stock_name_texts = vec![Text::raw(stock_name)];
     let stock_name_paragraph = Paragraph::new(stock_name_texts.iter())
@@ -89,7 +89,7 @@ fn draw_header<B: Backend>(
 
     ui_state
         .ui_target_areas
-        .send((UiTarget::StockName, Some(stock_name_area)));
+        .send((UiTarget::StockNameButton, Some(stock_name_area)));
 
     Ok(())
 }
@@ -443,12 +443,14 @@ fn draw_overlay<B: Backend>(f: &mut Frame<B>, App { ui_state, .. }: &App) -> any
     let active_base_style = Style::default().fg(Color::White).bg(Color::DarkGray);
     let highlight_base_style = Style::default().fg(Color::Black).bg(Color::White);
 
-    if ui_state.stock_symbol_input_state.active {
+    let stock_symbol_field_state = ui_state.stock_symbol_field_state.borrow();
+
+    if stock_symbol_field_state.active {
         let chunks = Layout::default()
             .direction(Direction::Horizontal)
             .constraints(vec![Constraint::Length(30), Constraint::Min(0)])
             .split(f.size());
-        let stock_symbol_input_area = chunks[0];
+        let stock_symbol_field_area = chunks[0];
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints(vec![
@@ -456,29 +458,29 @@ fn draw_overlay<B: Backend>(f: &mut Frame<B>, App { ui_state, .. }: &App) -> any
                 Constraint::Length(3),
                 Constraint::Min(0),
             ])
-            .split(stock_symbol_input_area);
-        let stock_symbol_input_area = chunks[1];
+            .split(stock_symbol_field_area);
+        let stock_symbol_field_area = chunks[1];
 
-        let stock_symbol_input_texts =
-            vec![Text::raw(ui_state.stock_symbol_input_state.value.as_str())];
-        let stock_symbol_input_paragraph = Paragraph::new(stock_symbol_input_texts.iter())
-            .block(
-                Block::default()
-                    .style(active_base_style)
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Gray)),
-            )
-            .style(active_base_style);
-        f.render_widget(Clear, stock_symbol_input_area);
-        f.render_widget(stock_symbol_input_paragraph, stock_symbol_input_area);
+        let stock_symbol_field_value = stock_symbol_field_state.value.clone();
+        let stock_symbol_field_texts = vec![Text::raw(stock_symbol_field_value.as_str())];
+        let stock_symbol_field = TextField::new(stock_symbol_field_texts.iter())
+            .style(active_base_style)
+            .border_style(Style::default().fg(Color::Gray));
+        drop(stock_symbol_field_state);
+        let mut stock_symbol_field_state = ui_state.stock_symbol_field_state.borrow_mut();
+        f.render_stateful_widget(
+            stock_symbol_field,
+            stock_symbol_field_area,
+            &mut stock_symbol_field_state,
+        );
 
         ui_state
             .ui_target_areas
-            .send((UiTarget::StockSymbolInput, Some(stock_symbol_input_area)));
+            .send((UiTarget::StockSymbolField, Some(stock_symbol_field_area)));
     } else {
         ui_state
             .ui_target_areas
-            .send((UiTarget::StockSymbolInput, None));
+            .send((UiTarget::StockSymbolField, None));
     }
 
     let indicator_menu_state = ui_state.indicator_menu_state.borrow();
@@ -524,11 +526,11 @@ fn draw_overlay<B: Backend>(f: &mut Frame<B>, App { ui_state, .. }: &App) -> any
 
         ui_state
             .ui_target_areas
-            .send((UiTarget::IndicatorList, Some(indicator_list_area)));
+            .send((UiTarget::IndicatorMenu, Some(indicator_list_area)));
     } else {
         ui_state
             .ui_target_areas
-            .send((UiTarget::IndicatorList, None));
+            .send((UiTarget::IndicatorMenu, None));
     }
 
     let time_frame_menu_state = ui_state.time_frame_menu_state.borrow();
@@ -568,11 +570,11 @@ fn draw_overlay<B: Backend>(f: &mut Frame<B>, App { ui_state, .. }: &App) -> any
 
         ui_state
             .ui_target_areas
-            .send((UiTarget::TimeFrameList, Some(time_frame_list_area)));
+            .send((UiTarget::TimeFrameMenu, Some(time_frame_list_area)));
     } else {
         ui_state
             .ui_target_areas
-            .send((UiTarget::TimeFrameList, None));
+            .send((UiTarget::TimeFrameMenu, None));
     }
 
     Ok(())

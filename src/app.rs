@@ -1,4 +1,9 @@
-use crate::{event::InputEvent, reactive::StreamExt, stock::Stock, widgets::SelectMenuState};
+use crate::{
+    event::InputEvent,
+    reactive::StreamExt,
+    stock::Stock,
+    widgets::{SelectMenuState, TextFieldState},
+};
 use chrono::{DateTime, Datelike, Duration, Utc};
 use crossterm::event::{KeyCode, KeyEvent};
 use derivative::Derivative;
@@ -43,7 +48,7 @@ pub struct UiState<'r> {
     // pub frame_rate_counter: FrameRateCounter,
     pub indicator: Option<Indicator>,
     pub indicator_menu_state: Rc<RefCell<SelectMenuState<Indicator>>>,
-    pub stock_symbol_input_state: InputState,
+    pub stock_symbol_field_state: Rc<RefCell<TextFieldState>>,
     pub time_frame: TimeFrame,
     pub time_frame_menu_state: Rc<RefCell<SelectMenuState<TimeFrame>>>,
     #[derivative(Debug = "ignore")]
@@ -53,7 +58,7 @@ pub struct UiState<'r> {
 impl<'r> UiState<'r> {
     // pub fn input_cursor(
     //     &self,
-    //     input_state: &InputState,
+    //     input_state: &TextFieldState,
     //     input_target: UiTarget,
     // ) -> Option<(u16, u16)> {
     //     let target_areas = self.target_areas.read();
@@ -84,7 +89,7 @@ impl<'r> Default for UiState<'r> {
                 menu_state.select(None).unwrap();
                 menu_state
             })),
-            stock_symbol_input_state: InputState::default(),
+            stock_symbol_field_state: Rc::new(RefCell::new(TextFieldState::default())),
             time_frame: TimeFrame::default(),
             time_frame_menu_state: Rc::new(RefCell::new({
                 let mut menu_state = SelectMenuState::new(TimeFrame::iter());
@@ -207,21 +212,15 @@ where
         .distinct_until_changed()
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct InputState {
-    pub active: bool,
-    pub value: String,
-}
-
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum UiTarget {
     IndicatorBox,
-    IndicatorList,
-    StockName,
-    StockSymbol,
-    StockSymbolInput,
+    IndicatorMenu,
+    StockNameButton,
+    StockSymbolButton,
+    StockSymbolField,
     TimeFrameBox,
-    TimeFrameList,
+    TimeFrameMenu,
 }
 
 #[derive(Debug)]
