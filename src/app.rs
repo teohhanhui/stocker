@@ -1,4 +1,9 @@
-use crate::{event::InputEvent, reactive::StreamExt, stock::Stock, widgets::SelectMenuState};
+use crate::{
+    event::ChartEvent,
+    reactive::StreamExt,
+    stock::Stock,
+    widgets::{SelectMenuState, TextFieldState},
+};
 use chrono::{DateTime, Datelike, Duration, Utc};
 use crossterm::event::{KeyCode, KeyEvent};
 use derivative::Derivative;
@@ -23,7 +28,7 @@ use std::{
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
 use thiserror::Error;
-use tui::layout::{Margin, Rect};
+use tui::layout::Rect;
 use typenum::{Unsigned, U2, U20, U50};
 use yahoo_finance::Interval;
 
@@ -43,32 +48,11 @@ pub struct UiState<'r> {
     // pub frame_rate_counter: FrameRateCounter,
     pub indicator: Option<Indicator>,
     pub indicator_menu_state: Rc<RefCell<SelectMenuState<Indicator>>>,
-    pub stock_symbol_input_state: InputState,
+    pub stock_symbol_field_state: Rc<RefCell<TextFieldState>>,
     pub time_frame: TimeFrame,
     pub time_frame_menu_state: Rc<RefCell<SelectMenuState<TimeFrame>>>,
     #[derivative(Debug = "ignore")]
     pub ui_target_areas: Broadcast<'r, (), (UiTarget, Option<Rect>)>,
-}
-
-impl<'r> UiState<'r> {
-    // pub fn input_cursor(
-    //     &self,
-    //     input_state: &InputState,
-    //     input_target: UiTarget,
-    // ) -> Option<(u16, u16)> {
-    //     let target_areas = self.target_areas.read();
-    //     let input_area = target_areas.get(&input_target)?;
-    //     let border_margin = Margin {
-    //         horizontal: 1,
-    //         vertical: 1,
-    //     };
-    //     let inner_area = input_area.inner(&border_margin);
-
-    //     let cx = inner_area.left() + input_state.value.chars().count() as u16;
-    //     let cy = inner_area.top();
-
-    //     Some((cx, cy))
-    // }
 }
 
 impl<'r> Default for UiState<'r> {
@@ -84,7 +68,7 @@ impl<'r> Default for UiState<'r> {
                 menu_state.select(None).unwrap();
                 menu_state
             })),
-            stock_symbol_input_state: InputState::default(),
+            stock_symbol_field_state: Rc::new(RefCell::new(TextFieldState::default())),
             time_frame: TimeFrame::default(),
             time_frame_menu_state: Rc::new(RefCell::new({
                 let mut menu_state = SelectMenuState::new(TimeFrame::iter());
@@ -96,22 +80,20 @@ impl<'r> Default for UiState<'r> {
     }
 }
 
-pub fn to_date_ranges<'a, V, S, R, U, C>(
-    input_events: V,
-    stock_symbols: S,
-    time_frames: R,
+pub fn to_date_ranges<'a, S, U, R, C>(
+    chart_events: S,
+    stock_symbols: U,
     init_stock_symbol: String,
+    time_frames: R,
     init_time_frame: TimeFrame,
-    active_overlay_ui_targets: U,
 ) -> impl Stream<'a, Item = Option<DateRange>, Context = C>
 where
-    V: Stream<'a, Item = InputEvent, Context = C>,
-    S: Stream<'a, Item = String>,
+    S: Stream<'a, Item = ChartEvent, Context = C>,
+    U: Stream<'a, Item = String>,
     R: Stream<'a, Item = TimeFrame>,
-    U: Stream<'a, Item = Option<UiTarget>>,
     C: 'a + Clone,
 {
-    input_events
+    chart_events
         .combine_latest(
             stock_symbols.distinct_until_changed(),
             |(ev, stock_symbol)| (*ev, stock_symbol.clone()),
@@ -120,86 +102,69 @@ where
             time_frames.distinct_until_changed(),
             |((ev, stock_symbol), time_frame)| (*ev, stock_symbol.clone(), *time_frame),
         )
-        .with_latest_from(
-            active_overlay_ui_targets,
-            |((ev, stock_symbol, time_frame), active_overlay_ui_target)| {
-                (
-                    *ev,
-                    stock_symbol.clone(),
-                    *time_frame,
-                    *active_overlay_ui_target,
-                )
-            },
-        )
         .fold(
             (
                 init_time_frame.now_date_range(),
                 init_stock_symbol,
                 init_time_frame,
             ),
-            |(acc_date_range, acc_stock_symbol, acc_time_frame),
-             (ev, stock_symbol, time_frame, active_overlay_ui_target)| {
-                let stock_symbol_changed = acc_stock_symbol != stock_symbol;
-                let time_frame_changed = acc_time_frame != time_frame;
-                if stock_symbol_changed || time_frame_changed {
-                    return (
-                        time_frame.now_date_range(),
-                        stock_symbol.clone(),
-                        *time_frame,
-                    );
-                }
-
-                match ev {
-                    InputEvent::Key(KeyEvent { code, .. }) => match code {
-                        KeyCode::Left
-                            if active_overlay_ui_target.is_none()
-                                && time_frame != &TimeFrame::YearToDate =>
-                        {
-                            let date_range = time_frame.duration().map(|duration| {
-                                acc_date_range
-                                    .as_ref()
-                                    .map(|acc_date_range| {
-                                        let end_date = acc_date_range.start;
-                                        (end_date - duration)..end_date
-                                    })
-                                    .unwrap()
-                            });
-                            (date_range, stock_symbol.clone(), *time_frame)
-                        }
-                        KeyCode::Right
-                            if active_overlay_ui_target.is_none()
-                                && time_frame != &TimeFrame::YearToDate =>
-                        {
-                            let date_range = time_frame.duration().map(|duration| {
-                                acc_date_range
-                                    .as_ref()
-                                    .map(|acc_date_range| {
-                                        let start_date = acc_date_range.end;
-                                        start_date..(start_date + duration)
-                                    })
-                                    .map(|date_range| {
-                                        let max_date_range = time_frame.now_date_range().unwrap();
-                                        if date_range.end > max_date_range.end {
-                                            max_date_range
-                                        } else {
-                                            date_range
-                                        }
-                                    })
-                                    .unwrap()
-                            });
-                            (date_range, stock_symbol.clone(), *time_frame)
-                        }
-                        _ => (
-                            acc_date_range.clone(),
-                            acc_stock_symbol.clone(),
-                            *acc_time_frame,
-                        ),
-                    },
-                    _ => (
+            |(acc_date_range, acc_stock_symbol, acc_time_frame), (ev, stock_symbol, time_frame)| {
+                let noop = || {
+                    (
                         acc_date_range.clone(),
                         acc_stock_symbol.clone(),
                         *acc_time_frame,
-                    ),
+                    )
+                };
+                let reset = || {
+                    (
+                        time_frame.now_date_range(),
+                        stock_symbol.clone(),
+                        *time_frame,
+                    )
+                };
+
+                let stock_symbol_changed = acc_stock_symbol != stock_symbol;
+                let time_frame_changed = acc_time_frame != time_frame;
+                if stock_symbol_changed || time_frame_changed {
+                    return reset();
+                }
+
+                match ev {
+                    ChartEvent::PanBackward if time_frame != &TimeFrame::YearToDate => {
+                        let date_range = time_frame.duration().map(|duration| {
+                            acc_date_range
+                                .as_ref()
+                                .map(|acc_date_range| {
+                                    let end_date = acc_date_range.start;
+                                    (end_date - duration)..end_date
+                                })
+                                .unwrap()
+                        });
+                        (date_range, stock_symbol.clone(), *time_frame)
+                    }
+                    ChartEvent::PanForward if time_frame != &TimeFrame::YearToDate => {
+                        let date_range = time_frame.duration().map(|duration| {
+                            acc_date_range
+                                .as_ref()
+                                .map(|acc_date_range| {
+                                    let start_date = acc_date_range.end;
+                                    start_date..(start_date + duration)
+                                })
+                                .map(|date_range| {
+                                    let max_date_range = time_frame.now_date_range().unwrap();
+                                    if date_range.end > max_date_range.end {
+                                        max_date_range
+                                    } else {
+                                        date_range
+                                    }
+                                })
+                                .unwrap()
+                        });
+                        (date_range, stock_symbol.clone(), *time_frame)
+                    }
+                    ChartEvent::Reset => reset(),
+                    _ => noop(),
                 }
             },
         )
@@ -207,21 +172,15 @@ where
         .distinct_until_changed()
 }
 
-#[derive(Clone, Debug, Default)]
-pub struct InputState {
-    pub active: bool,
-    pub value: String,
-}
-
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum UiTarget {
     IndicatorBox,
-    IndicatorList,
-    StockName,
-    StockSymbol,
-    StockSymbolInput,
+    IndicatorMenu,
+    StockNameButton,
+    StockSymbolButton,
+    StockSymbolField,
     TimeFrameBox,
-    TimeFrameList,
+    TimeFrameMenu,
 }
 
 #[derive(Debug)]

@@ -7,21 +7,21 @@ use tui::{
     widgets::{self, Block, Borders, Clear, List, ListState, Paragraph, Text},
 };
 
-pub struct SelectMenuBox<'a, S: 'a, T>
+pub struct SelectMenuBox<'a, 't, S: 'a, T>
 where
     S: Clone + PartialEq + ToString,
-    T: Iterator<Item = &'a Text<'a>>,
+    T: Iterator<Item = &'t Text<'t>>,
 {
     active_border_style: Style,
     active_style: Style,
-    paragraph: Paragraph<'a, 'a, T>,
+    paragraph: Paragraph<'a, 't, T>,
     phantom_s: PhantomData<&'a S>,
 }
 
-impl<'a, S, T> SelectMenuBox<'a, S, T>
+impl<'a, 't, S, T> SelectMenuBox<'a, 't, S, T>
 where
     S: Clone + PartialEq + ToString,
-    T: Iterator<Item = &'a Text<'a>>,
+    T: Iterator<Item = &'t Text<'t>>,
 {
     pub fn new(text: T) -> Self {
         Self {
@@ -48,10 +48,10 @@ where
     }
 }
 
-impl<'a, S, T> widgets::StatefulWidget for SelectMenuBox<'a, S, T>
+impl<'a, 't, S, T> widgets::StatefulWidget for SelectMenuBox<'a, 't, S, T>
 where
     S: Clone + PartialEq + ToString,
-    T: Iterator<Item = &'a Text<'a>>,
+    T: Iterator<Item = &'t Text<'t>>,
 {
     type State = SelectMenuState<S>;
 
@@ -72,6 +72,7 @@ where
                 Style::default()
             });
 
+        widgets::Widget::render(Clear, area, buf);
         widgets::Widget::render(paragraph, area, buf);
     }
 }
@@ -175,6 +176,10 @@ where
             .map(|n| self.items[n].clone())
     }
 
+    pub fn selected_index(&self) -> Option<usize> {
+        self.list_state.selected()
+    }
+
     pub fn select(&mut self, item: Option<T>) -> anyhow::Result<()> {
         let n = item.map_or_else(
             || {
@@ -191,7 +196,7 @@ where
             },
         )?;
 
-        self.select_nth(n)?;
+        self.select_index(n)?;
 
         Ok(())
     }
@@ -209,7 +214,7 @@ where
             |n| if n > 0 { n - 1 } else { 0 },
         );
 
-        self.select_nth(n)?;
+        self.select_index(n)?;
 
         Ok(())
     }
@@ -225,12 +230,12 @@ where
             }
         });
 
-        self.select_nth(n)?;
+        self.select_index(n)?;
 
         Ok(())
     }
 
-    pub fn select_nth(&mut self, n: usize) -> anyhow::Result<()> {
+    pub fn select_index(&mut self, n: usize) -> anyhow::Result<()> {
         self.list_state.select(Some(n));
 
         Ok(())

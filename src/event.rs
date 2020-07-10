@@ -1,7 +1,7 @@
 use crate::{
-    app::{InputState, UiTarget},
+    app::UiTarget,
     reactive::{Grouped, StreamExt},
-    widgets::SelectMenuState,
+    widgets::{SelectMenuState, TextFieldState},
 };
 use bimap::BiMap;
 use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent};
@@ -19,15 +19,20 @@ pub enum InputEvent {
     Tick,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum ChartEvent {
+    PanBackward,
+    PanForward,
+    Reset,
+}
+
 #[derive(Clone, Debug)]
 pub enum TextFieldEvent {
     Accept(String),
     Activate,
     Deactivate,
     Input(String),
-    MoveCursorBackward,
-    MoveCursorForward,
-    MoveCursorTo(usize),
+    MoveCursor(usize),
     Toggle,
 }
 
@@ -36,9 +41,7 @@ pub enum SelectMenuEvent {
     Accept(Option<String>),
     Activate,
     Deactivate,
-    SelectNext,
-    SelectNth(usize),
-    SelectPrev,
+    SelectIndex(usize),
     Toggle,
 }
 
@@ -124,53 +127,110 @@ where
         )
 }
 
-pub fn to_text_field_events<'a, S, U, R, F, C>(
-    input_events: S,
-    overlay_states: U,
-    activation_hotkey: KeyCode,
-    map_mouse_funcs: R,
-    map_value_func: F,
-) -> impl Stream<'a, Item = TextFieldEvent, Context = C>
+pub fn to_chart_events<'a, S, C>(input_events: S) -> impl Stream<'a, Item = ChartEvent, Context = C>
 where
     S: Stream<'a, Item = InputEvent, Context = C>,
-    U: Stream<'a, Item = OverlayState>,
-    R: Stream<'a, Item = ToTextFieldMapMouseFn>,
+    C: 'a + Clone,
+{
+    input_events.filter_map(|ev| match ev {
+        InputEvent::Key(KeyEvent { code, .. }) => match code {
+            KeyCode::Left => Some(ChartEvent::PanBackward),
+            KeyCode::Right => Some(ChartEvent::PanForward),
+            KeyCode::End => Some(ChartEvent::Reset),
+            KeyCode::PageUp => Some(ChartEvent::PanBackward),
+            KeyCode::PageDown => Some(ChartEvent::PanForward),
+            _ => None,
+        },
+        _ => None,
+    })
+}
+
+pub fn to_text_field_events<'a, S, O, U, F, C>(
+    input_events: S,
+    init_text_field_state: TextFieldState,
+    overlay_states: O,
+    activation_hotkey: KeyCode,
+    ui_target_areas: U,
+    self_ui_target: UiTarget,
+    text_field_event_map: HashMap<Option<UiTarget>, TextFieldEvent>,
+    map_value_func: F,
+) -> impl Stream<'a, Item = (TextFieldEvent, TextFieldState), Context = C>
+where
+    S: Stream<'a, Item = InputEvent, Context = C>,
+    O: Stream<'a, Item = OverlayState>,
+    U: Stream<'a, Item = (UiTarget, Option<Rect>)>,
     F: 'a + Clone + FnOnce(String) -> String,
     C: 'a + Clone,
 {
+    let text_field_event_map = text_field_event_map.without(&Some(self_ui_target));
+
+    let ui_target_area_bufs = ui_target_areas
+        .filter({
+            let text_field_event_map = text_field_event_map.clone();
+            move |(ui_target, _)| {
+                *ui_target == self_ui_target || text_field_event_map.contains_key(&Some(*ui_target))
+            }
+        })
+        .buffer(text_field_event_map.without(&None).len() + 1)
+        .map(move |ui_target_areas| {
+            ui_target_areas
+                .iter()
+                .filter_map(|(ui_target, area)| area.map(|area| (*ui_target, area)))
+                .rev()
+                .collect::<Vec<_>>()
+        });
+
     input_events
         .combine_latest(
             overlay_states.distinct_until_changed(),
             |(ev, overlay_state)| (*ev, *overlay_state),
         )
-        .with_latest_from(map_mouse_funcs, |((ev, overlay_state), map_mouse_func)| {
-            (*ev, *overlay_state, map_mouse_func.clone())
-        })
+        .with_latest_from(
+            ui_target_area_bufs,
+            |((ev, overlay_state), ui_target_areas)| (*ev, *overlay_state, ui_target_areas.clone()),
+        )
         .fold(
-            (None, InputState::default(), OverlayState::default()),
-            move |(_, acc_input_state, acc_overlay_state), (ev, overlay_state, map_mouse_func)| {
+            (
+                None,
+                init_text_field_state.clone(),
+                init_text_field_state,
+                OverlayState::default(),
+            ),
+            move |(_, acc_text_field_state, acc_saved_text_field_state, acc_overlay_state),
+                  (ev, overlay_state, ui_target_areas)| {
+                let noop = || {
+                    (
+                        None,
+                        acc_text_field_state.clone(),
+                        acc_saved_text_field_state.clone(),
+                        *overlay_state,
+                    )
+                };
+
                 let overlay_state_transitioned = acc_overlay_state != overlay_state;
                 if overlay_state_transitioned {
                     let overlay_state_changed = match overlay_state {
-                        OverlayState::Active => !acc_input_state.active,
-                        OverlayState::Inactive => acc_input_state.active,
+                        OverlayState::Active => !acc_text_field_state.active,
+                        OverlayState::Inactive => acc_text_field_state.active,
                     };
                     if !overlay_state_changed {
-                        return (None, acc_input_state.clone(), *overlay_state);
+                        return noop();
                     }
 
                     return match (acc_overlay_state, overlay_state) {
                         (OverlayState::Inactive, OverlayState::Active) => (
                             Some(TextFieldEvent::Activate),
-                            InputState {
+                            TextFieldState {
                                 active: true,
-                                value: acc_input_state.value.clone(),
+                                value: acc_text_field_state.value.clone(),
                             },
+                            acc_saved_text_field_state.clone(),
                             *overlay_state,
                         ),
                         (OverlayState::Active, OverlayState::Inactive) => (
                             Some(TextFieldEvent::Deactivate),
-                            InputState::default(),
+                            acc_saved_text_field_state.clone(),
+                            acc_saved_text_field_state.clone(),
                             *overlay_state,
                         ),
                         _ => {
@@ -181,97 +241,140 @@ where
 
                 match ev {
                     InputEvent::Key(KeyEvent { code, .. }) => match code {
-                        KeyCode::Backspace if acc_input_state.active => {
-                            let mut value = acc_input_state.value.clone();
+                        KeyCode::Backspace if acc_text_field_state.active => {
+                            let mut value = acc_text_field_state.value.clone();
                             value.pop();
                             let map_value_func = map_value_func.clone();
                             let value = map_value_func(value);
                             (
                                 Some(TextFieldEvent::Input(value.clone())),
-                                InputState {
+                                TextFieldState {
                                     value,
-                                    ..*acc_input_state
+                                    ..*acc_text_field_state
                                 },
+                                acc_saved_text_field_state.clone(),
                                 *overlay_state,
                             )
                         }
                         KeyCode::Enter
-                            if acc_input_state.active && !acc_input_state.value.is_empty() =>
+                            if acc_text_field_state.active
+                                && !acc_text_field_state.value.is_empty() =>
                         {
                             (
                                 Some(TextFieldEvent::Accept(
-                                    acc_input_state.value.trim().to_owned(),
+                                    acc_text_field_state.value.trim().to_owned(),
                                 )),
-                                InputState::default(),
+                                acc_saved_text_field_state.clone(),
+                                acc_saved_text_field_state.clone(),
                                 *overlay_state,
                             )
                         }
-                        KeyCode::Esc if acc_input_state.active => (
+                        KeyCode::Esc if acc_text_field_state.active => (
                             Some(TextFieldEvent::Deactivate),
-                            InputState::default(),
+                            acc_saved_text_field_state.clone(),
+                            acc_saved_text_field_state.clone(),
                             *overlay_state,
                         ),
-                        &key_code if key_code == activation_hotkey && !acc_input_state.active => (
-                            Some(TextFieldEvent::Activate),
-                            InputState {
-                                active: true,
-                                value: acc_input_state.value.clone(),
-                            },
-                            *overlay_state,
-                        ),
-                        KeyCode::Char(c) if acc_input_state.active => {
-                            let mut value = acc_input_state.value.clone();
+                        &key_code
+                            if key_code == activation_hotkey && !acc_text_field_state.active =>
+                        {
+                            (
+                                Some(TextFieldEvent::Activate),
+                                TextFieldState {
+                                    active: true,
+                                    value: acc_text_field_state.value.clone(),
+                                },
+                                acc_saved_text_field_state.clone(),
+                                *overlay_state,
+                            )
+                        }
+                        KeyCode::Char(c) if acc_text_field_state.active => {
+                            let mut value = acc_text_field_state.value.clone();
                             value.push(*c);
                             let map_value_func = map_value_func.clone();
                             let value = map_value_func(value);
                             (
                                 Some(TextFieldEvent::Input(value.clone())),
-                                InputState {
+                                TextFieldState {
                                     value,
-                                    ..*acc_input_state
+                                    ..*acc_text_field_state
                                 },
+                                acc_saved_text_field_state.clone(),
                                 *overlay_state,
                             )
                         }
-                        _ => (None, acc_input_state.clone(), *overlay_state),
+                        _ => noop(),
                     },
-                    InputEvent::Mouse(MouseEvent::Up(MouseButton::Left, x, y, _)) => {
-                        let (input_state, ev) =
-                            map_mouse_func.call(acc_input_state.clone(), (*x, *y));
-                        (ev, input_state, *overlay_state)
+                    &InputEvent::Mouse(MouseEvent::Up(MouseButton::Left, x, y, _)) => {
+                        let _point = (x, y);
+                        let hit = ui_target_areas.iter().find(|(_, area)| {
+                            area.left() <= x
+                                && area.right() > x
+                                && area.top() <= y
+                                && area.bottom() > y
+                        });
+
+                        match hit {
+                            Some(&(ui_target, _area))
+                                if ui_target == self_ui_target && acc_text_field_state.active =>
+                            {
+                                noop()
+                            }
+                            _ => match text_field_event_map
+                                .get(&hit.map(|(ui_target, _)| *ui_target))
+                            {
+                                Some(TextFieldEvent::Activate) if !acc_text_field_state.active => (
+                                    Some(TextFieldEvent::Activate),
+                                    TextFieldState {
+                                        active: true,
+                                        value: acc_text_field_state.value.clone(),
+                                    },
+                                    acc_saved_text_field_state.clone(),
+                                    *overlay_state,
+                                ),
+                                Some(TextFieldEvent::Activate) if acc_text_field_state.active => {
+                                    noop()
+                                }
+                                Some(TextFieldEvent::Deactivate) | Some(TextFieldEvent::Toggle)
+                                    if acc_text_field_state.active =>
+                                {
+                                    (
+                                        Some(TextFieldEvent::Deactivate),
+                                        acc_saved_text_field_state.clone(),
+                                        acc_saved_text_field_state.clone(),
+                                        *overlay_state,
+                                    )
+                                }
+                                Some(TextFieldEvent::Deactivate)
+                                    if !acc_text_field_state.active =>
+                                {
+                                    noop()
+                                }
+                                Some(TextFieldEvent::Toggle) if !acc_text_field_state.active => (
+                                    Some(TextFieldEvent::Activate),
+                                    TextFieldState {
+                                        active: true,
+                                        value: acc_text_field_state.value.clone(),
+                                    },
+                                    acc_saved_text_field_state.clone(),
+                                    *overlay_state,
+                                ),
+                                Some(ev) => {
+                                    unimplemented!("unhandled text field event: {:?}", ev);
+                                }
+                                None => noop(),
+                            },
+                        }
                     }
-                    _ => (None, acc_input_state.clone(), *overlay_state),
+                    _ => noop(),
                 }
             },
         )
-        .filter_map(|(ev, ..)| ev.clone())
-}
-
-pub fn to_text_field_states<'a, S, C>(
-    text_field_events: S,
-) -> impl Stream<'a, Item = InputState, Context = C>
-where
-    S: Stream<'a, Item = TextFieldEvent, Context = C>,
-{
-    text_field_events.fold(InputState::default(), |acc_input_state, ev| match ev {
-        TextFieldEvent::Activate => InputState {
-            active: true,
-            value: acc_input_state.value.clone(),
-        },
-        TextFieldEvent::Input(value) => InputState {
-            value: value.clone(),
-            ..*acc_input_state
-        },
-        TextFieldEvent::Accept(_) | TextFieldEvent::Deactivate => InputState::default(),
-        TextFieldEvent::Toggle if acc_input_state.active => InputState::default(),
-        TextFieldEvent::Toggle if !acc_input_state.active => InputState {
-            active: true,
-            value: acc_input_state.value.clone(),
-        },
-        _ => {
-            unreachable!();
-        }
-    })
+        .filter_map(|(ev, text_field_state, ..)| {
+            ev.as_ref()
+                .cloned()
+                .map(|ev| (ev, text_field_state.clone()))
+        })
 }
 
 pub fn to_select_menu_events<'a, S, V, O, U, C>(
@@ -372,11 +475,14 @@ where
                 match ev {
                     InputEvent::Key(KeyEvent { code, .. }) => match code {
                         KeyCode::Enter if acc_select_menu_state.active => {
-                            let mut select_menu_state = acc_select_menu_state.clone();
-                            select_menu_state.active = false;
+                            let select_menu_state = {
+                                let mut select_menu_state = acc_select_menu_state.clone();
+                                select_menu_state.active = false;
+                                select_menu_state
+                            };
                             (
                                 Some(SelectMenuEvent::Accept(
-                                    acc_select_menu_state.selected().map(|s| s.to_string()),
+                                    select_menu_state.selected().map(|s| s.to_string()),
                                 )),
                                 select_menu_state.clone(),
                                 select_menu_state,
@@ -389,26 +495,36 @@ where
                             acc_saved_select_menu_state.clone(),
                             *overlay_state,
                         ),
-                        KeyCode::Up if acc_select_menu_state.active => (
-                            Some(SelectMenuEvent::SelectPrev),
-                            {
+                        KeyCode::Up if acc_select_menu_state.active => {
+                            let select_menu_state = {
                                 let mut select_menu_state = acc_select_menu_state.clone();
                                 select_menu_state.select_prev().unwrap();
                                 select_menu_state
-                            },
-                            acc_saved_select_menu_state.clone(),
-                            *overlay_state,
-                        ),
-                        KeyCode::Down if acc_select_menu_state.active => (
-                            Some(SelectMenuEvent::SelectNext),
-                            {
+                            };
+                            (
+                                Some(SelectMenuEvent::SelectIndex(
+                                    select_menu_state.selected_index().unwrap(),
+                                )),
+                                select_menu_state,
+                                acc_saved_select_menu_state.clone(),
+                                *overlay_state,
+                            )
+                        }
+                        KeyCode::Down if acc_select_menu_state.active => {
+                            let select_menu_state = {
                                 let mut select_menu_state = acc_select_menu_state.clone();
                                 select_menu_state.select_next().unwrap();
                                 select_menu_state
-                            },
-                            acc_saved_select_menu_state.clone(),
-                            *overlay_state,
-                        ),
+                            };
+                            (
+                                Some(SelectMenuEvent::SelectIndex(
+                                    select_menu_state.selected_index().unwrap(),
+                                )),
+                                select_menu_state,
+                                acc_saved_select_menu_state.clone(),
+                                *overlay_state,
+                            )
+                        }
                         &key_code
                             if key_code == activation_hotkey && !acc_select_menu_state.active =>
                         {
@@ -449,7 +565,7 @@ where
                                 if let Some(n) = acc_select_menu_state.point_to_index(area, point) {
                                     let select_menu_state = {
                                         let mut select_menu_state = acc_select_menu_state.clone();
-                                        select_menu_state.select_nth(n).unwrap();
+                                        select_menu_state.select_index(n).unwrap();
                                         select_menu_state.active = false;
                                         select_menu_state
                                     };
@@ -643,97 +759,4 @@ where
         .inspect(|active_overlay| {
             debug!("active overlay: {:?}", active_overlay);
         })
-}
-
-pub fn to_text_field_map_mouse_funcs<'a, S, C>(
-    ui_target_areas: S,
-    self_ui_target: UiTarget,
-    text_field_event_map: HashMap<Option<UiTarget>, TextFieldEvent>,
-) -> impl Stream<'a, Item = ToTextFieldMapMouseFn, Context = C>
-where
-    S: Stream<'a, Item = (UiTarget, Option<Rect>), Context = C>,
-{
-    let text_field_event_map = text_field_event_map.without(&Some(self_ui_target));
-
-    ui_target_areas
-        .filter({
-            let text_field_event_map = text_field_event_map.clone();
-            move |(ui_target, _)| {
-                *ui_target == self_ui_target || text_field_event_map.contains_key(&Some(*ui_target))
-            }
-        })
-        .buffer(text_field_event_map.without(&None).len() + 1)
-        .map(move |ui_target_areas| {
-            let ui_target_areas: Vec<_> = ui_target_areas
-                .iter()
-                .filter_map(|(ui_target, area)| area.map(|area| (*ui_target, area)))
-                .rev()
-                .collect();
-
-            ToTextFieldMapMouseFn {
-                self_ui_target,
-                text_field_event_map: text_field_event_map.clone(),
-                ui_target_areas,
-            }
-        })
-}
-
-#[derive(Clone, Debug)]
-pub struct ToTextFieldMapMouseFn {
-    self_ui_target: UiTarget,
-    text_field_event_map: HashMap<Option<UiTarget>, TextFieldEvent>,
-    /// available UI targets and their respective area, in reverse z-order (top-most to bottom-most)
-    ui_target_areas: Vec<(UiTarget, Rect)>,
-}
-
-impl ToTextFieldMapMouseFn {
-    pub fn call(
-        &self,
-        input_state: InputState,
-        (x, y): (u16, u16),
-    ) -> (InputState, Option<TextFieldEvent>) {
-        let ui_target_areas = self.ui_target_areas.clone();
-        let self_ui_target = self.self_ui_target;
-        let text_field_event_map = self.text_field_event_map.clone();
-
-        let hit_target = ui_target_areas
-            .iter()
-            .find(|(_, area)| {
-                area.left() <= x && area.right() > x && area.top() <= y && area.bottom() > y
-            })
-            .map(|(hit_target, _)| hit_target)
-            .copied();
-
-        let active = input_state.active;
-
-        if hit_target == Some(self_ui_target) {
-            return (input_state, None);
-        }
-
-        match text_field_event_map.get(&hit_target) {
-            Some(TextFieldEvent::Activate) if !active => (
-                InputState {
-                    active: true,
-                    ..input_state
-                },
-                Some(TextFieldEvent::Activate),
-            ),
-            Some(TextFieldEvent::Activate) if active => (input_state, None),
-            Some(TextFieldEvent::Deactivate) | Some(TextFieldEvent::Toggle) if active => {
-                (InputState::default(), Some(TextFieldEvent::Deactivate))
-            }
-            Some(TextFieldEvent::Deactivate) if !active => (input_state, None),
-            Some(TextFieldEvent::Toggle) if !active => (
-                InputState {
-                    active: true,
-                    ..input_state
-                },
-                Some(TextFieldEvent::Activate),
-            ),
-            Some(ev) => {
-                unimplemented!("unhandled text field event: {:?}", ev);
-            }
-            None => (input_state, None),
-        }
-    }
 }
