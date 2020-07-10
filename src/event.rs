@@ -19,15 +19,20 @@ pub enum InputEvent {
     Tick,
 }
 
+#[derive(Clone, Copy, Debug)]
+pub enum ChartEvent {
+    PanBackward,
+    PanForward,
+    Reset,
+}
+
 #[derive(Clone, Debug)]
 pub enum TextFieldEvent {
     Accept(String),
     Activate,
     Deactivate,
     Input(String),
-    MoveCursorBackward,
-    MoveCursorForward,
-    MoveCursorTo(usize),
+    MoveCursor(usize),
     Toggle,
 }
 
@@ -36,9 +41,7 @@ pub enum SelectMenuEvent {
     Accept(Option<String>),
     Activate,
     Deactivate,
-    SelectNext,
-    SelectNth(usize),
-    SelectPrev,
+    SelectIndex(usize),
     Toggle,
 }
 
@@ -122,6 +125,24 @@ where
             },
             |(ev, ..)| *ev,
         )
+}
+
+pub fn to_chart_events<'a, S, C>(input_events: S) -> impl Stream<'a, Item = ChartEvent, Context = C>
+where
+    S: Stream<'a, Item = InputEvent, Context = C>,
+    C: 'a + Clone,
+{
+    input_events.filter_map(|ev| match ev {
+        InputEvent::Key(KeyEvent { code, .. }) => match code {
+            KeyCode::Left => Some(ChartEvent::PanBackward),
+            KeyCode::Right => Some(ChartEvent::PanForward),
+            KeyCode::End => Some(ChartEvent::Reset),
+            KeyCode::PageUp => Some(ChartEvent::PanBackward),
+            KeyCode::PageDown => Some(ChartEvent::PanForward),
+            _ => None,
+        },
+        _ => None,
+    })
 }
 
 pub fn to_text_field_events<'a, S, O, U, F, C>(
@@ -454,11 +475,14 @@ where
                 match ev {
                     InputEvent::Key(KeyEvent { code, .. }) => match code {
                         KeyCode::Enter if acc_select_menu_state.active => {
-                            let mut select_menu_state = acc_select_menu_state.clone();
-                            select_menu_state.active = false;
+                            let select_menu_state = {
+                                let mut select_menu_state = acc_select_menu_state.clone();
+                                select_menu_state.active = false;
+                                select_menu_state
+                            };
                             (
                                 Some(SelectMenuEvent::Accept(
-                                    acc_select_menu_state.selected().map(|s| s.to_string()),
+                                    select_menu_state.selected().map(|s| s.to_string()),
                                 )),
                                 select_menu_state.clone(),
                                 select_menu_state,
@@ -471,26 +495,36 @@ where
                             acc_saved_select_menu_state.clone(),
                             *overlay_state,
                         ),
-                        KeyCode::Up if acc_select_menu_state.active => (
-                            Some(SelectMenuEvent::SelectPrev),
-                            {
+                        KeyCode::Up if acc_select_menu_state.active => {
+                            let select_menu_state = {
                                 let mut select_menu_state = acc_select_menu_state.clone();
                                 select_menu_state.select_prev().unwrap();
                                 select_menu_state
-                            },
-                            acc_saved_select_menu_state.clone(),
-                            *overlay_state,
-                        ),
-                        KeyCode::Down if acc_select_menu_state.active => (
-                            Some(SelectMenuEvent::SelectNext),
-                            {
+                            };
+                            (
+                                Some(SelectMenuEvent::SelectIndex(
+                                    select_menu_state.selected_index().unwrap(),
+                                )),
+                                select_menu_state,
+                                acc_saved_select_menu_state.clone(),
+                                *overlay_state,
+                            )
+                        }
+                        KeyCode::Down if acc_select_menu_state.active => {
+                            let select_menu_state = {
                                 let mut select_menu_state = acc_select_menu_state.clone();
                                 select_menu_state.select_next().unwrap();
                                 select_menu_state
-                            },
-                            acc_saved_select_menu_state.clone(),
-                            *overlay_state,
-                        ),
+                            };
+                            (
+                                Some(SelectMenuEvent::SelectIndex(
+                                    select_menu_state.selected_index().unwrap(),
+                                )),
+                                select_menu_state,
+                                acc_saved_select_menu_state.clone(),
+                                *overlay_state,
+                            )
+                        }
                         &key_code
                             if key_code == activation_hotkey && !acc_select_menu_state.active =>
                         {
@@ -531,7 +565,7 @@ where
                                 if let Some(n) = acc_select_menu_state.point_to_index(area, point) {
                                     let select_menu_state = {
                                         let mut select_menu_state = acc_select_menu_state.clone();
-                                        select_menu_state.select_nth(n).unwrap();
+                                        select_menu_state.select_index(n).unwrap();
                                         select_menu_state.active = false;
                                         select_menu_state
                                     };

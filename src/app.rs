@@ -1,5 +1,5 @@
 use crate::{
-    event::InputEvent,
+    event::ChartEvent,
     reactive::StreamExt,
     stock::Stock,
     widgets::{SelectMenuState, TextFieldState},
@@ -80,22 +80,20 @@ impl<'r> Default for UiState<'r> {
     }
 }
 
-pub fn to_date_ranges<'a, V, S, R, U, C>(
-    input_events: V,
-    stock_symbols: S,
-    time_frames: R,
+pub fn to_date_ranges<'a, S, U, R, C>(
+    chart_events: S,
+    stock_symbols: U,
     init_stock_symbol: String,
+    time_frames: R,
     init_time_frame: TimeFrame,
-    active_overlay_ui_targets: U,
 ) -> impl Stream<'a, Item = Option<DateRange>, Context = C>
 where
-    V: Stream<'a, Item = InputEvent, Context = C>,
-    S: Stream<'a, Item = String>,
+    S: Stream<'a, Item = ChartEvent, Context = C>,
+    U: Stream<'a, Item = String>,
     R: Stream<'a, Item = TimeFrame>,
-    U: Stream<'a, Item = Option<UiTarget>>,
     C: 'a + Clone,
 {
-    input_events
+    chart_events
         .combine_latest(
             stock_symbols.distinct_until_changed(),
             |(ev, stock_symbol)| (*ev, stock_symbol.clone()),
@@ -104,86 +102,69 @@ where
             time_frames.distinct_until_changed(),
             |((ev, stock_symbol), time_frame)| (*ev, stock_symbol.clone(), *time_frame),
         )
-        .with_latest_from(
-            active_overlay_ui_targets,
-            |((ev, stock_symbol, time_frame), active_overlay_ui_target)| {
-                (
-                    *ev,
-                    stock_symbol.clone(),
-                    *time_frame,
-                    *active_overlay_ui_target,
-                )
-            },
-        )
         .fold(
             (
                 init_time_frame.now_date_range(),
                 init_stock_symbol,
                 init_time_frame,
             ),
-            |(acc_date_range, acc_stock_symbol, acc_time_frame),
-             (ev, stock_symbol, time_frame, active_overlay_ui_target)| {
-                let stock_symbol_changed = acc_stock_symbol != stock_symbol;
-                let time_frame_changed = acc_time_frame != time_frame;
-                if stock_symbol_changed || time_frame_changed {
-                    return (
-                        time_frame.now_date_range(),
-                        stock_symbol.clone(),
-                        *time_frame,
-                    );
-                }
-
-                match ev {
-                    InputEvent::Key(KeyEvent { code, .. }) => match code {
-                        KeyCode::Left
-                            if active_overlay_ui_target.is_none()
-                                && time_frame != &TimeFrame::YearToDate =>
-                        {
-                            let date_range = time_frame.duration().map(|duration| {
-                                acc_date_range
-                                    .as_ref()
-                                    .map(|acc_date_range| {
-                                        let end_date = acc_date_range.start;
-                                        (end_date - duration)..end_date
-                                    })
-                                    .unwrap()
-                            });
-                            (date_range, stock_symbol.clone(), *time_frame)
-                        }
-                        KeyCode::Right
-                            if active_overlay_ui_target.is_none()
-                                && time_frame != &TimeFrame::YearToDate =>
-                        {
-                            let date_range = time_frame.duration().map(|duration| {
-                                acc_date_range
-                                    .as_ref()
-                                    .map(|acc_date_range| {
-                                        let start_date = acc_date_range.end;
-                                        start_date..(start_date + duration)
-                                    })
-                                    .map(|date_range| {
-                                        let max_date_range = time_frame.now_date_range().unwrap();
-                                        if date_range.end > max_date_range.end {
-                                            max_date_range
-                                        } else {
-                                            date_range
-                                        }
-                                    })
-                                    .unwrap()
-                            });
-                            (date_range, stock_symbol.clone(), *time_frame)
-                        }
-                        _ => (
-                            acc_date_range.clone(),
-                            acc_stock_symbol.clone(),
-                            *acc_time_frame,
-                        ),
-                    },
-                    _ => (
+            |(acc_date_range, acc_stock_symbol, acc_time_frame), (ev, stock_symbol, time_frame)| {
+                let noop = || {
+                    (
                         acc_date_range.clone(),
                         acc_stock_symbol.clone(),
                         *acc_time_frame,
-                    ),
+                    )
+                };
+                let reset = || {
+                    (
+                        time_frame.now_date_range(),
+                        stock_symbol.clone(),
+                        *time_frame,
+                    )
+                };
+
+                let stock_symbol_changed = acc_stock_symbol != stock_symbol;
+                let time_frame_changed = acc_time_frame != time_frame;
+                if stock_symbol_changed || time_frame_changed {
+                    return reset();
+                }
+
+                match ev {
+                    ChartEvent::PanBackward if time_frame != &TimeFrame::YearToDate => {
+                        let date_range = time_frame.duration().map(|duration| {
+                            acc_date_range
+                                .as_ref()
+                                .map(|acc_date_range| {
+                                    let end_date = acc_date_range.start;
+                                    (end_date - duration)..end_date
+                                })
+                                .unwrap()
+                        });
+                        (date_range, stock_symbol.clone(), *time_frame)
+                    }
+                    ChartEvent::PanForward if time_frame != &TimeFrame::YearToDate => {
+                        let date_range = time_frame.duration().map(|duration| {
+                            acc_date_range
+                                .as_ref()
+                                .map(|acc_date_range| {
+                                    let start_date = acc_date_range.end;
+                                    start_date..(start_date + duration)
+                                })
+                                .map(|date_range| {
+                                    let max_date_range = time_frame.now_date_range().unwrap();
+                                    if date_range.end > max_date_range.end {
+                                        max_date_range
+                                    } else {
+                                        date_range
+                                    }
+                                })
+                                .unwrap()
+                        });
+                        (date_range, stock_symbol.clone(), *time_frame)
+                    }
+                    ChartEvent::Reset => reset(),
+                    _ => noop(),
                 }
             },
         )

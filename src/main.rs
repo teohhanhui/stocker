@@ -1,6 +1,6 @@
 use crate::{
     app::{App, Indicator, TimeFrame, UiState, UiTarget},
-    event::{InputEvent, OverlayEvent, OverlayState, SelectMenuEvent, TextFieldEvent},
+    event::{ChartEvent, InputEvent, OverlayEvent, OverlayState, SelectMenuEvent, TextFieldEvent},
     reactive::StreamExt as ReactiveStreamExt,
     stock::Stock,
     widgets::{SelectMenuState, TextFieldState},
@@ -215,6 +215,8 @@ async fn main() -> anyhow::Result<()> {
         .switch()
         .broadcast();
 
+    let chart_events = event::to_chart_events(non_overlay_user_input_events.clone()).broadcast();
+
     let init_stock_symbol_field_state = TextFieldState::default();
 
     let stock_symbol_text_field_events = event::to_text_field_events(
@@ -356,12 +358,11 @@ async fn main() -> anyhow::Result<()> {
         .broadcast();
 
     let date_ranges = app::to_date_ranges(
-        non_overlay_user_input_events.clone(),
+        chart_events.clone(),
         stock_symbols.clone(),
-        time_frames.clone(),
         args.symbol.clone(),
+        time_frames.clone(),
         args.time_frame,
-        active_overlays.clone(),
     )
     .broadcast();
 
@@ -604,7 +605,7 @@ async fn main() -> anyhow::Result<()> {
     input_events.send(InputEvent::Tick);
 
     // send the initial values
-    date_ranges.send(args.time_frame.now_date_range());
+    chart_events.send(ChartEvent::Reset);
     time_frames.send(args.time_frame);
     indicators.send(args.indicator);
     stock_symbols.send(args.symbol);

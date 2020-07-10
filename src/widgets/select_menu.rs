@@ -176,6 +176,10 @@ where
             .map(|n| self.items[n].clone())
     }
 
+    pub fn selected_index(&self) -> Option<usize> {
+        self.list_state.selected()
+    }
+
     pub fn select(&mut self, item: Option<T>) -> anyhow::Result<()> {
         let n = item.map_or_else(
             || {
@@ -192,7 +196,7 @@ where
             },
         )?;
 
-        self.select_nth(n)?;
+        self.select_index(n)?;
 
         Ok(())
     }
@@ -210,7 +214,7 @@ where
             |n| if n > 0 { n - 1 } else { 0 },
         );
 
-        self.select_nth(n)?;
+        self.select_index(n)?;
 
         Ok(())
     }
@@ -226,12 +230,12 @@ where
             }
         });
 
-        self.select_nth(n)?;
+        self.select_index(n)?;
 
         Ok(())
     }
 
-    pub fn select_nth(&mut self, n: usize) -> anyhow::Result<()> {
+    pub fn select_index(&mut self, n: usize) -> anyhow::Result<()> {
         self.list_state.select(Some(n));
 
         Ok(())
