@@ -5,25 +5,16 @@ use crate::{
     widgets::{SelectMenuState, TextFieldState},
 };
 use chrono::{DateTime, Datelike, Duration, Utc};
-use crossterm::event::{KeyCode, KeyEvent};
 use derivative::Derivative;
 use derive_more::{Display, From, Into};
 use derive_new::new;
 use math::round;
 use once_cell::sync::Lazy;
-use parking_lot::RwLock;
 use reactive_rs::{Broadcast, Stream};
 use regex::Regex;
 use shrinkwraprs::Shrinkwrap;
 use std::{
-    cell::RefCell,
-    fmt,
-    marker::PhantomData,
-    num::ParseIntError,
-    ops::Range,
-    rc::Rc,
-    str::FromStr,
-    sync::atomic::{self, AtomicU16},
+    cell::RefCell, fmt, marker::PhantomData, num::ParseIntError, ops::Range, rc::Rc, str::FromStr,
 };
 use strum::IntoEnumIterator;
 use strum_macros::EnumIter;
@@ -44,8 +35,8 @@ type DateRange = Range<DateTime<Utc>>;
 #[derivative(Debug)]
 pub struct UiState<'r> {
     pub date_range: Option<DateRange>,
-    // debug_draw: bool,
-    // pub frame_rate_counter: FrameRateCounter,
+    pub debug_draw: bool,
+    pub frame_rate_counter: Rc<RefCell<FrameRateCounter>>,
     pub indicator: Option<Indicator>,
     pub indicator_menu_state: Rc<RefCell<SelectMenuState<Indicator>>>,
     pub stock_symbol_field_state: Rc<RefCell<TextFieldState>>,
@@ -59,8 +50,10 @@ impl<'r> Default for UiState<'r> {
     fn default() -> Self {
         Self {
             date_range: TimeFrame::default().now_date_range(),
-            // debug_draw: false,
-            // frame_rate_counter: FrameRateCounter::new(Duration::milliseconds(1_000)),
+            debug_draw: false,
+            frame_rate_counter: Rc::new(RefCell::new(FrameRateCounter::new(
+                Duration::milliseconds(1_000),
+            ))),
             indicator: None,
             indicator_menu_state: Rc::new(RefCell::new({
                 let mut menu_state = SelectMenuState::new(Indicator::iter());
@@ -185,39 +178,37 @@ pub enum UiTarget {
 
 #[derive(Debug)]
 pub struct FrameRateCounter {
-    frame_time: AtomicU16,
-    frames: AtomicU16,
-    last_interval: RwLock<DateTime<Utc>>,
+    frame_time: u16,
+    frames: u16,
+    last_interval: DateTime<Utc>,
     update_interval: Duration,
 }
 
 impl FrameRateCounter {
     pub fn new(update_interval: Duration) -> Self {
         Self {
-            frame_time: AtomicU16::new(0),
-            frames: AtomicU16::new(0),
-            last_interval: RwLock::new(Utc::now()),
+            frame_time: 0,
+            frames: 0,
+            last_interval: Utc::now(),
             update_interval,
         }
     }
 
     /// Increments the counter. Returns the frame time if the update interval has elapsed.
-    pub fn incr(&self) -> Option<Duration> {
-        self.frames.fetch_add(1, atomic::Ordering::Relaxed);
+    pub fn incr(&mut self) -> Option<Duration> {
+        self.frames += 1;
 
         let now = Utc::now();
 
-        if now >= *self.last_interval.read() + self.update_interval {
-            let frames = self.frames.load(atomic::Ordering::Relaxed);
+        if now >= self.last_interval + self.update_interval {
             let frame_time =
-                (now - *self.last_interval.read()).num_milliseconds() as f64 / frames as f64;
+                (now - self.last_interval).num_milliseconds() as f64 / self.frames as f64;
             let frame_time = round::floor(frame_time, 0) as u16;
-            self.frame_time.store(frame_time, atomic::Ordering::Relaxed);
+            self.frame_time = frame_time;
 
-            self.frames.store(0, atomic::Ordering::Relaxed);
+            self.frames = 0;
 
-            let mut last_interval = self.last_interval.write();
-            *last_interval = now;
+            self.last_interval = now;
 
             return Some(Duration::milliseconds(frame_time as i64));
         }
@@ -226,7 +217,7 @@ impl FrameRateCounter {
     }
 
     pub fn frame_time(&self) -> Option<Duration> {
-        match self.frame_time.load(atomic::Ordering::Relaxed) {
+        match self.frame_time {
             0 => None,
             frame_time => Some(Duration::milliseconds(frame_time as i64)),
         }

@@ -421,8 +421,11 @@ async fn main() -> anyhow::Result<()> {
         .map(|(_, select_menu_state)| select_menu_state.clone())
         .broadcast();
 
+    let debug_draws: Broadcast<(), bool> = Broadcast::new();
+
     let init_ui_state = UiState {
         date_range: args.time_frame.now_date_range(),
+        debug_draw: args.debug_draw,
         indicator: args.indicator,
         indicator_menu_state: Rc::new(RefCell::new(init_indicator_menu_state.clone())),
         stock_symbol_field_state: Rc::new(RefCell::new(init_stock_symbol_field_state.clone())),
@@ -488,6 +491,30 @@ async fn main() -> anyhow::Result<()> {
                 )
             },
         )
+        .combine_latest(
+            debug_draws.clone(),
+            |(
+                (
+                    time_frame,
+                    date_range,
+                    indicator,
+                    stock_symbol_field_state,
+                    time_frame_menu_state,
+                    indicator_menu_state,
+                ),
+                debug_draw,
+            )| {
+                (
+                    *time_frame,
+                    date_range.clone(),
+                    *indicator,
+                    stock_symbol_field_state.clone(),
+                    time_frame_menu_state.clone(),
+                    indicator_menu_state.clone(),
+                    *debug_draw,
+                )
+            },
+        )
         .fold(init_ui_state.clone(), {
             let ui_target_areas = ui_target_areas.clone();
             move |acc_ui_state,
@@ -498,8 +525,10 @@ async fn main() -> anyhow::Result<()> {
                 stock_symbol_field_state,
                 time_frame_menu_state,
                 indicator_menu_state,
+                debug_draw,
             )| UiState {
                 date_range: date_range.clone(),
+                debug_draw: *debug_draw,
                 indicator: *indicator,
                 indicator_menu_state: Rc::new(RefCell::new(indicator_menu_state.clone())),
                 stock_symbol_field_state: Rc::new(RefCell::new(stock_symbol_field_state.clone())),
@@ -612,6 +641,7 @@ async fn main() -> anyhow::Result<()> {
     stock_symbol_field_states.send(init_stock_symbol_field_state);
     time_frame_menu_states.send(init_time_frame_menu_state);
     indicator_menu_states.send(init_indicator_menu_state);
+    debug_draws.send(args.debug_draw);
     active_overlays.send(None);
     overlay_states.feed(
         vec![

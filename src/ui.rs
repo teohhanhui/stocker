@@ -38,9 +38,9 @@ pub fn draw<B: Backend>(f: &mut Frame<B>, app: &App) -> anyhow::Result<()> {
     draw_body(f, app, body_area)?;
     draw_footer(f, app, footer_area)?;
     draw_overlay(f, app)?;
-    // if app.ui_state.debug_draw() {
-    //     draw_debug(f, app)?;
-    // }
+    if app.ui_state.debug_draw {
+        draw_debug(f, app)?;
+    }
 
     Ok(())
 }
@@ -580,58 +580,61 @@ fn draw_overlay<B: Backend>(f: &mut Frame<B>, App { ui_state, .. }: &App) -> any
     Ok(())
 }
 
-// fn draw_debug<B: Backend>(
-//     f: &mut Frame<B>,
-//     App {
-//         ui_state: UiState {
-//             frame_rate_counter, ..
-//         },
-//         ..
-//     }: &App,
-// ) -> anyhow::Result<()> {
-//     let frame_time = if let Some(frame_time) = frame_rate_counter.incr() {
-//         Some(frame_time)
-//     } else {
-//         frame_rate_counter.frame_time()
-//     };
-//     let frame_time_text = if let Some(frame_time) = frame_time {
-//         format!("{} ms", frame_time.num_milliseconds())
-//     } else {
-//         "...".to_owned()
-//     };
+fn draw_debug<B: Backend>(
+    f: &mut Frame<B>,
+    App {
+        ui_state: UiState {
+            frame_rate_counter, ..
+        },
+        ..
+    }: &App,
+) -> anyhow::Result<()> {
+    let frame_time = {
+        let mut frame_rate_counter = frame_rate_counter.borrow_mut();
+        if let Some(frame_time) = frame_rate_counter.incr() {
+            Some(frame_time)
+        } else {
+            frame_rate_counter.frame_time()
+        }
+    };
+    let frame_time_text = if let Some(frame_time) = frame_time {
+        format!("{} ms", frame_time.num_milliseconds())
+    } else {
+        "...".to_owned()
+    };
 
-//     let chunks = Layout::default()
-//         .direction(Direction::Horizontal)
-//         .constraints(vec![Constraint::Length(20), Constraint::Min(0)])
-//         .split(f.size());
-//     let timestamp_area = chunks[0];
-//     let chunks = Layout::default()
-//         .direction(Direction::Vertical)
-//         .constraints(vec![Constraint::Min(0), Constraint::Length(1)])
-//         .split(timestamp_area);
-//     let timestamp_area = chunks[1];
+    let chunks = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints(vec![Constraint::Length(20), Constraint::Min(0)])
+        .split(f.size());
+    let timestamp_area = chunks[0];
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(vec![Constraint::Min(0), Constraint::Length(1)])
+        .split(timestamp_area);
+    let timestamp_area = chunks[1];
 
-//     let timestamp_texts = vec![
-//         Text::styled("Frame time: ", Style::default()),
-//         Text::styled(
-//             frame_time_text,
-//             if let Some(frame_time) = frame_time {
-//                 if frame_time
-//                     >= Duration::milliseconds(round::ceil(crate::TICK_RATE as f64 * 1.1, 0) as i64)
-//                 {
-//                     Style::default().fg(Color::Red)
-//                 } else {
-//                     Style::default().fg(Color::Green)
-//                 }
-//             } else {
-//                 Style::default()
-//             },
-//         ),
-//     ];
-//     let timestamp_paragraph = Paragraph::new(timestamp_texts.iter());
+    let timestamp_texts = vec![
+        Text::styled("Frame time: ", Style::default()),
+        Text::styled(
+            frame_time_text,
+            if let Some(frame_time) = frame_time {
+                if frame_time
+                    >= Duration::milliseconds(round::ceil(crate::TICK_RATE as f64 * 1.1, 0) as i64)
+                {
+                    Style::default().fg(Color::Red)
+                } else {
+                    Style::default().fg(Color::Green)
+                }
+            } else {
+                Style::default()
+            },
+        ),
+    ];
+    let timestamp_paragraph = Paragraph::new(timestamp_texts.iter());
 
-//     f.render_widget(Clear, timestamp_area);
-//     f.render_widget(timestamp_paragraph, timestamp_area);
+    f.render_widget(Clear, timestamp_area);
+    f.render_widget(timestamp_paragraph, timestamp_area);
 
-//     Ok(())
-// }
+    Ok(())
+}
