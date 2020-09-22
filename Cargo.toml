@@ -45,7 +45,3 @@ thiserror = "1.0.20"
 tui = { version = "0.9.5", default-features = false, features = ['crossterm'] }
 typenum = "1.12.0"
 yahoo-finance = "0.3.0"
-
-[patch.crates-io]
-tui = { git = "https://github.com/fdehau/tui-rs" }
-yahoo-finance = { git = "https://github.com/fbriden/yahoo-finance-rs" }
