@@ -1,6 +1,6 @@
 [package]
 name = "stocker"
-version = "0.1.2"
+version = "0.2.0"
 authors = ["Teoh Han Hui <teohhanhui@gmail.com>"]
 edition = "2018"
 description = "Stocks dashboard"
