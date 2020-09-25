@@ -66,6 +66,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e1ba68f4276a778591e36a0c348a269888f3a177c8d2054969389e3b59611ff5"
 
 [[package]]
+name = "async-barrier"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "04b50fe84d0aea412a4e751cb01b9e26e2be533b2708607c2a2a739b192ee45a"
+dependencies = [
+ "async-mutex",
+ "event-listener",
+]
+
+[[package]]
 name = "async-channel"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -77,55 +87,137 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-compat"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4316ce79a7185ddb5cbb692bc5e992e3bbdb68a00382fa0b0ee248f05c16ecd7"
+dependencies = [
+ "futures-core",
+ "futures-io",
+ "once_cell",
+ "pin-project-lite",
+ "tokio",
+]
+
+[[package]]
 name = "async-executor"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d373d78ded7d0b3fa8039375718cde0aace493f2e34fb60f51cbf567562ca801"
 dependencies = [
- "async-task 4.0.1",
+ "async-task 4.0.2",
  "concurrent-queue",
  "fastrand",
- "futures-lite 1.7.0",
+ "futures-lite",
  "once_cell",
  "vec-arena",
 ]
 
 [[package]]
-name = "async-global-executor"
-version = "1.1.1"
+name = "async-fs"
+version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ffd4f132a18f3fe7329c7b907047684f1b06174a900c559b661b2da8bb9cad5f"
+checksum = "e3572236ba37147ca2b674a0bd5afd20aec0cd925ab125ab6fad6543960f9002"
+dependencies = [
+ "blocking",
+ "futures-lite",
+]
+
+[[package]]
+name = "async-global-executor"
+version = "1.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5586e693d02f9b439742e9d5d68bd64d923c6861954f7d78f91001a0e152d589"
 dependencies = [
  "async-executor",
  "async-io",
- "futures-lite 1.7.0",
+ "futures-lite",
  "num_cpus",
  "once_cell",
 ]
 
 [[package]]
 name = "async-io"
-version = "1.1.2"
+version = "1.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64c629684e697f58c0e99e5e2d84a840e3b336afbcfdbac7b44c3b1e222c2fd8"
+checksum = "a9951f92a2b4f7793f8fc06a80bdb89b62c618c993497d4606474fb8c34941b5"
 dependencies = [
  "concurrent-queue",
  "fastrand",
- "futures-lite 1.7.0",
+ "futures-lite",
  "log",
  "nb-connect",
  "once_cell",
- "parking 2.0.0",
+ "parking",
  "polling",
  "vec-arena",
  "waker-fn",
 ]
 
 [[package]]
+name = "async-lock"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "76000290eb3c67dfe4e2bdf6b6155847f8e16fc844377a7bd0b5e97622656362"
+dependencies = [
+ "async-barrier",
+ "async-mutex",
+ "async-rwlock",
+ "async-semaphore",
+]
+
+[[package]]
 name = "async-mutex"
+version = "1.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "479db852db25d9dbf6204e6cb6253698f175c15726470f78af0d918e99d6156e"
+dependencies = [
+ "event-listener",
+]
+
+[[package]]
+name = "async-net"
+version = "1.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb04482b77baa38d59d56aee0a7b4266600ab28e2b8be7af03508f6a30ecbdcf"
+dependencies = [
+ "async-io",
+ "blocking",
+ "fastrand",
+ "futures-lite",
+]
+
+[[package]]
+name = "async-process"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0bb915df28b8309139bd9c9c700d84c20e5c21385d05378caa84912332d0f6a1"
+dependencies = [
+ "async-io",
+ "blocking",
+ "cfg-if",
+ "event-listener",
+ "futures-lite",
+ "once_cell",
+ "signal-hook",
+ "winapi 0.3.9",
+]
+
+[[package]]
+name = "async-rwlock"
 version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "66941c2577c4fa351e4ce5fdde8f86c69b88d623f3b955be1bc7362a23434632"
+checksum = "261803dcc39ba9e72760ba6e16d0199b1eef9fc44e81bffabbebb9f5aea3906c"
+dependencies = [
+ "async-mutex",
+ "event-listener",
+]
+
+[[package]]
+name = "async-semaphore"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "538c756e85eb6ffdefaec153804afb6da84b033e2e5ec3e9d459c34b4bf4d3f6"
 dependencies = [
  "event-listener",
 ]
@@ -140,12 +232,12 @@ dependencies = [
  "async-io",
  "async-mutex",
  "async-task 3.0.0",
- "blocking 1.0.0",
+ "blocking",
  "crossbeam-utils",
  "futures-channel",
  "futures-core",
  "futures-io",
- "futures-lite 1.7.0",
+ "futures-lite",
  "gloo-timers",
  "kv-log-macro",
  "log",
@@ -166,9 +258,9 @@ checksum = "c17772156ef2829aadc587461c7753af20b7e8db1529bc66855add962a3b35d3"
 
 [[package]]
 name = "async-task"
-version = "4.0.1"
+version = "4.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6725e96011a83fae25074a8734932e8d67763522839be7473dcfe8a0d6a378b1"
+checksum = "8ab27c1aa62945039e44edaeee1dc23c74cc0c303dd5fe0fb462a184f1c3a518"
 
 [[package]]
 name = "atomic-waker"
@@ -273,20 +365,6 @@ dependencies = [
 
 [[package]]
 name = "blocking"
-version = "0.4.7"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d2468ff7bf85066b4a3678fede6fe66db31846d753ff0adfbfab2c6a6e81612b"
-dependencies = [
- "async-channel",
- "atomic-waker",
- "futures-lite 0.1.11",
- "once_cell",
- "parking 1.0.6",
- "waker-fn",
-]
-
-[[package]]
-name = "blocking"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2640778f8053e72c11f621b0a5175a0560a269282aa98ed85107773ab8e2a556"
@@ -294,7 +372,7 @@ dependencies = [
  "async-channel",
  "atomic-waker",
  "fastrand",
- "futures-lite 1.7.0",
+ "futures-lite",
  "once_cell",
  "waker-fn",
 ]
@@ -512,6 +590,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "134951f4028bdadb9b84baf4232681efbf277da25144b9b0ad65df75946c422b"
 
 [[package]]
+name = "easy-parallel"
+version = "3.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1dd4afd79212583ff429b913ad6605242ed7eec277e950b1438f300748f948f4"
+
+[[package]]
 name = "either"
 version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -646,30 +730,15 @@ checksum = "de27142b013a8e869c14957e6d2edeef89e97c289e69d042ee3a49acd8b51789"
 
 [[package]]
 name = "futures-lite"
-version = "0.1.11"
+version = "1.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "97999970129b808f0ccba93211201d431fcc12d7e1ffae03a61b5cedd1a7ced2"
+checksum = "0db18c5f58083b54b0c416638ea73066722c2815c1e54dd8ba85ee3def593c3a"
 dependencies = [
  "fastrand",
  "futures-core",
  "futures-io",
  "memchr",
- "parking 2.0.0",
- "pin-project-lite",
- "waker-fn",
-]
-
-[[package]]
-name = "futures-lite"
-version = "1.7.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b77e08e656f472d8ea84c472fa8b0a7a917883048e1cf2d4e34a323cd0aaf63"
-dependencies = [
- "fastrand",
- "futures-core",
- "futures-io",
- "memchr",
- "parking 2.0.0",
+ "parking",
  "pin-project-lite",
  "waker-fn",
 ]
@@ -1367,12 +1436,6 @@ dependencies = [
 
 [[package]]
 name = "parking"
-version = "1.0.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6cb300f271742d4a2a66c01b6b2fa0c83dfebd2e0bf11addb879a3547b4ed87c"
-
-[[package]]
-name = "parking"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "427c3892f9e783d91cc128285287e70a59e206ca452770ece88a76f7a3eddd72"
@@ -1722,12 +1785,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "scoped-tls"
-version = "1.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ea6a9290e3c9cf0f18145ef7ffa62d68ee0bf5fcd651017e586dc7fd5da448c2"
-
-[[package]]
 name = "scopeguard"
 version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1892,41 +1949,39 @@ checksum = "fbee7696b84bbf3d89a1c2eccff0850e3047ed46bfcd2e92c29a2d074d57e252"
 
 [[package]]
 name = "smol"
-version = "0.1.18"
+version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "620cbb3c6e34da57d3a248cda0cd01cd5848164dc062e764e65d06fe3ea7aed5"
+checksum = "d41237ba3e3ada55ff3515d37becc8fa90e5e4af2b13a011ec3f932d9f1b2405"
 dependencies = [
- "async-task 3.0.0",
- "blocking 0.4.7",
- "concurrent-queue",
- "fastrand",
- "futures-io",
- "futures-util",
- "libc",
+ "async-channel",
+ "async-executor",
+ "async-fs",
+ "async-io",
+ "async-lock",
+ "async-net",
+ "async-process",
+ "blocking",
+ "futures-lite",
  "once_cell",
- "scoped-tls",
- "slab",
- "socket2",
- "tokio",
- "wepoll-sys-stjepang",
- "winapi 0.3.9",
 ]
 
 [[package]]
 name = "smol-potat"
-version = "0.3.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "888b677843b4a1a51d23aac1cda71fd3c365bd6bcf6b124653f9dad766c4990a"
+version = "1.0.0"
+source = "git+https://github.com/wusyong/smol-potat#517308e9ced46314a91b74536f9cbecbb7cc13aa"
 dependencies = [
+ "async-channel",
+ "async-executor",
+ "easy-parallel",
+ "futures-lite",
  "smol",
- "smol-potat-derive",
+ "smol-potat-macro",
 ]
 
 [[package]]
-name = "smol-potat-derive"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a62773b8ef6acf14da474c54a85dcdfe6f08c9aace38396e1373f0c1e1b2df76"
+name = "smol-potat-macro"
+version = "0.4.0"
+source = "git+https://github.com/wusyong/smol-potat#517308e9ced46314a91b74536f9cbecbb7cc13aa"
 dependencies = [
  "quote",
  "syn",
@@ -1971,6 +2026,7 @@ version = "0.2.0"
 dependencies = [
  "anyhow",
  "argh",
+ "async-compat",
  "async-std",
  "better-panic",
  "bimap",

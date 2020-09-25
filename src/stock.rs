@@ -2,6 +2,7 @@ use crate::{
     app::{Indicator, TimeFrame},
     reactive::StreamExt,
 };
+use async_compat::Compat;
 use chrono::{DateTime, Duration, TimeZone, Utc};
 use futures::executor;
 use gcollections::ops::{Bounded, Difference, Union};
@@ -64,8 +65,10 @@ where
                     stock_profile_map.get(stock_symbol).cloned()
                 };
                 let profile = profile.unwrap_or_else(|| {
-                    let profile = executor::block_on(Profile::load(stock_symbol.as_str()))
-                        .expect("profile load failed");
+                    let profile = executor::block_on(Compat::new(async {
+                        Profile::load(stock_symbol.as_str()).await
+                    }))
+                    .expect("profile load failed");
                     let mut stock_profile_map = stock_profile_map.borrow_mut();
                     stock_profile_map.insert(stock_symbol.clone(), profile.clone());
                     profile
@@ -196,11 +199,14 @@ where
                         let mut covered_date_ranges = covered_date_ranges;
                         let mut stock_bar_set = stock_bar_set;
                         for uncovered_date_range in uncovered_date_ranges {
-                            let bars = executor::block_on(history::retrieve_range(
-                                stock_symbol.as_str(),
-                                Utc.timestamp(uncovered_date_range.lower(), 0),
-                                Some(Utc.timestamp(uncovered_date_range.upper(), 0)),
-                            ))
+                            let bars = executor::block_on(Compat::new(async {
+                                history::retrieve_range(
+                                    stock_symbol.as_str(),
+                                    Utc.timestamp(uncovered_date_range.lower(), 0),
+                                    Some(Utc.timestamp(uncovered_date_range.upper(), 0)),
+                                )
+                                .await
+                            }))
                             .expect("historical prices retrieval failed");
                             covered_date_ranges = covered_date_ranges.union(
                                 &(uncovered_date_range.lower(), uncovered_date_range.upper())
@@ -211,10 +217,10 @@ where
 
                         (stock_bar_set, covered_date_ranges)
                     } else {
-                        let bars = executor::block_on(history::retrieve_interval(
-                            stock_symbol.as_str(),
-                            time_frame.interval(),
-                        ))
+                        let bars = executor::block_on(Compat::new(async {
+                            history::retrieve_interval(stock_symbol.as_str(), time_frame.interval())
+                                .await
+                        }))
                         .expect("historical prices retrieval failed");
                         let covered_date_ranges = if let (Some(first_bar), Some(last_bar)) =
                             (bars.first(), bars.last())
