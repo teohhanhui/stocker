@@ -16,7 +16,8 @@ use tui::{
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     symbols::Marker,
-    widgets::{Axis, Block, Borders, Chart, Clear, Dataset, GraphType, Paragraph, Text},
+    text::{Span, Spans},
+    widgets::{Axis, Block, Borders, Chart, Clear, Dataset, GraphType, ListItem, Paragraph},
     Frame,
 };
 use yahoo_finance::Timestamped;
@@ -71,20 +72,19 @@ fn draw_header<B: Backend>(
     let header_block = Block::default().style(header_base_style);
     f.render_widget(header_block, area);
 
-    let stock_symbol_texts = vec![Text::raw(stock.symbol.as_str())];
-    let stock_symbol_paragraph = Paragraph::new(stock_symbol_texts.iter())
-        .block(Block::default().style(header_base_style))
-        .style(header_base_style.clone().modifier(Modifier::BOLD));
+    let stock_symbol_paragraph = Paragraph::new(Span::styled(
+        stock.symbol.as_str(),
+        header_base_style.add_modifier(Modifier::BOLD),
+    ))
+    .block(Block::default().style(header_base_style));
     f.render_widget(stock_symbol_paragraph, stock_symbol_area);
 
     ui_state
         .ui_target_areas
         .send((UiTarget::StockSymbolButton, Some(stock_symbol_area)));
 
-    let stock_name_texts = vec![Text::raw(stock_name)];
-    let stock_name_paragraph = Paragraph::new(stock_name_texts.iter())
-        .block(Block::default().style(header_base_style))
-        .style(header_base_style);
+    let stock_name_paragraph = Paragraph::new(Span::styled(stock_name, header_base_style))
+        .block(Block::default().style(header_base_style));
     f.render_widget(stock_name_paragraph, stock_name_area);
 
     ui_state
@@ -297,7 +297,7 @@ fn draw_body<B: Backend>(
     ];
     let x_axis_labels: Vec<_> = timestamp_steps
         .iter()
-        .map(|&t| Utc.timestamp(t as i64, 0).format("%Y-%m-%d").to_string())
+        .map(|&t| Span::from(Utc.timestamp(t as i64, 0).format("%Y-%m-%d").to_string()))
         .collect();
 
     let (_, prices): (Vec<_>, Vec<_>) = historical_prices_data.values().flatten().copied().unzip();
@@ -314,18 +314,20 @@ fn draw_body<B: Backend>(
         NoElements => vec![0_f64, f64::INFINITY],
     };
     let y_axis_bounds = [*price_steps.first().unwrap(), *price_steps.last().unwrap()];
-    let y_axis_labels: Vec<_> = price_steps.iter().map(|&p| format!("{:.2}", p)).collect();
+    let y_axis_labels: Vec<_> = price_steps
+        .iter()
+        .map(|&p| Span::from(format!("{:.2}", p)))
+        .collect();
 
-    let historical_prices_chart = Chart::default()
+    let historical_prices_chart = Chart::new(historical_prices_datasets)
         .block(
             Block::default()
                 .title("Historical Prices")
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Gray)),
         )
-        .x_axis(Axis::default().bounds(x_axis_bounds).labels(&x_axis_labels))
-        .y_axis(Axis::default().bounds(y_axis_bounds).labels(&y_axis_labels))
-        .datasets(&historical_prices_datasets);
+        .x_axis(Axis::default().bounds(x_axis_bounds).labels(x_axis_labels))
+        .y_axis(Axis::default().bounds(y_axis_bounds).labels(y_axis_labels));
     f.render_widget(historical_prices_chart, area);
 
     Ok(())
@@ -361,8 +363,8 @@ fn draw_footer<B: Backend>(
         chunks[0]
     };
 
-    let indicators_texts = vec![
-        Text::styled(
+    let indicator_box = SelectMenuBox::new(Spans::from(vec![
+        Span::styled(
             "Indicator: ",
             if indicator_menu_state.active {
                 menu_active_base_style
@@ -370,7 +372,7 @@ fn draw_footer<B: Backend>(
                 Style::default()
             },
         ),
-        Text::styled(
+        Span::styled(
             if let Some(indicator) = ui_state.indicator {
                 indicator.to_string()
             } else {
@@ -382,11 +384,10 @@ fn draw_footer<B: Backend>(
                 Style::default()
             },
         ),
-    ];
-    let indicator_box = SelectMenuBox::new(indicators_texts.iter())
-        .active_style(menu_active_base_style)
-        .active_border_style(Style::default().fg(Color::Gray))
-        .alignment(Alignment::Right);
+    ]))
+    .active_style(menu_active_base_style)
+    .active_border_style(Style::default().fg(Color::Gray))
+    .alignment(Alignment::Right);
     drop(indicator_menu_state);
     let mut indicator_menu_state = ui_state.indicator_menu_state.borrow_mut();
     f.render_stateful_widget(indicator_box, indicator_box_area, &mut indicator_menu_state);
@@ -406,8 +407,8 @@ fn draw_footer<B: Backend>(
         chunks[0]
     };
 
-    let time_frame_texts = vec![
-        Text::styled(
+    let time_frame_box = SelectMenuBox::new(Spans::from(vec![
+        Span::styled(
             "Time frame: ",
             if time_frame_menu_state.active {
                 menu_active_base_style
@@ -415,7 +416,7 @@ fn draw_footer<B: Backend>(
                 Style::default()
             },
         ),
-        Text::styled(
+        Span::styled(
             ui_state.time_frame.to_string(),
             if time_frame_menu_state.active {
                 menu_active_base_style
@@ -423,11 +424,10 @@ fn draw_footer<B: Backend>(
                 Style::default()
             },
         ),
-    ];
-    let time_frame_box = SelectMenuBox::new(time_frame_texts.iter())
-        .active_style(menu_active_base_style)
-        .active_border_style(Style::default().fg(Color::Gray))
-        .alignment(Alignment::Right);
+    ]))
+    .active_style(menu_active_base_style)
+    .active_border_style(Style::default().fg(Color::Gray))
+    .alignment(Alignment::Right);
     drop(time_frame_menu_state);
     let mut time_frame_menu_state = ui_state.time_frame_menu_state.borrow_mut();
     f.render_stateful_widget(time_frame_box, time_frame_area, &mut time_frame_menu_state);
@@ -461,11 +461,11 @@ fn draw_overlay<B: Backend>(f: &mut Frame<B>, App { ui_state, .. }: &App) -> any
             .split(stock_symbol_field_area);
         let stock_symbol_field_area = chunks[1];
 
-        let stock_symbol_field_value = stock_symbol_field_state.value.clone();
-        let stock_symbol_field_texts = vec![Text::raw(stock_symbol_field_value.as_str())];
-        let stock_symbol_field = TextField::new(stock_symbol_field_texts.iter())
-            .style(active_base_style)
-            .border_style(Style::default().fg(Color::Gray));
+        let stock_symbol_field = TextField::new(Span::styled(
+            stock_symbol_field_state.value.clone(),
+            active_base_style,
+        ))
+        .border_style(Style::default().fg(Color::Gray));
         drop(stock_symbol_field_state);
         let mut stock_symbol_field_state = ui_state.stock_symbol_field_state.borrow_mut();
         f.render_stateful_widget(
@@ -510,9 +510,10 @@ fn draw_overlay<B: Backend>(f: &mut Frame<B>, App { ui_state, .. }: &App) -> any
             chunks[1]
         };
 
-        let indicator_menu_items = iter::once("None".to_owned())
+        let indicator_menu_items: Vec<_> = iter::once("None".to_owned())
             .chain(Indicator::iter().map(|t| t.to_string()))
-            .map(Text::raw);
+            .map(ListItem::new)
+            .collect();
         let indicator_list = SelectMenuList::new(indicator_menu_items)
             .border_style(Style::default().fg(Color::Gray))
             .highlight_style(highlight_base_style);
@@ -556,7 +557,9 @@ fn draw_overlay<B: Backend>(f: &mut Frame<B>, App { ui_state, .. }: &App) -> any
             chunks[1]
         };
 
-        let time_frame_menu_items = TimeFrame::iter().map(|t| Text::raw(t.to_string()));
+        let time_frame_menu_items: Vec<_> = TimeFrame::iter()
+            .map(|t| ListItem::new(t.to_string()))
+            .collect();
         let time_frame_list = SelectMenuList::new(time_frame_menu_items)
             .border_style(Style::default().fg(Color::Gray))
             .highlight_style(highlight_base_style);
@@ -614,9 +617,9 @@ fn draw_debug<B: Backend>(
         .split(timestamp_area);
     let timestamp_area = chunks[1];
 
-    let timestamp_texts = vec![
-        Text::styled("Frame time: ", Style::default()),
-        Text::styled(
+    let timestamp_paragraph = Paragraph::new(Spans::from(vec![
+        Span::styled("Frame time: ", Style::default()),
+        Span::styled(
             frame_time_text,
             if let Some(frame_time) = frame_time {
                 if frame_time
@@ -630,8 +633,7 @@ fn draw_debug<B: Backend>(
                 Style::default()
             },
         ),
-    ];
-    let timestamp_paragraph = Paragraph::new(timestamp_texts.iter());
+    ]));
 
     f.render_widget(Clear, timestamp_area);
     f.render_widget(timestamp_paragraph, timestamp_area);

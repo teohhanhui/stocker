@@ -43,7 +43,7 @@ strum = "0.18.0"
 strum_macros = "0.18.0"
 ta = "0.1.5"
 thiserror = "1.0.20"
-tui = { version = "0.9.5", default-features = false, features = ['crossterm'] }
+tui = { version = "0.12.0", default-features = false, features = ['crossterm'] }
 typenum = "1.12.0"
 yahoo-finance = "0.3.0"
 

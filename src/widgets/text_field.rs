@@ -2,50 +2,43 @@ use tui::{
     buffer::Buffer,
     layout::{Margin, Rect},
     style::{Color, Style},
-    widgets::{self, Block, Borders, Clear, Paragraph, Text},
+    text::Text,
+    widgets::{self, Block, Borders, Clear, Paragraph},
 };
 
-pub struct TextField<'a, 't, T>
-where
-    T: Iterator<Item = &'t Text<'t>>,
-{
+pub struct TextField<'a> {
     block: Block<'a>,
-    paragraph: Paragraph<'a, 't, T>,
+    paragraph: Paragraph<'a>,
 }
 
-impl<'a, 't, T> TextField<'a, 't, T>
-where
-    T: Iterator<Item = &'t Text<'t>>,
-{
-    pub fn new(text: T) -> Self {
+impl<'a> TextField<'a> {
+    pub fn new<T>(text: T) -> Self
+    where
+        T: Into<Text<'a>>,
+    {
         let block = Block::default()
             .style(Style::default().fg(Color::White).bg(Color::DarkGray))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(Color::Gray));
+        let paragraph = Paragraph::new(text).block(block.clone());
 
-        Self {
-            block,
-            paragraph: Paragraph::new(text).block(block),
-        }
+        Self { block, paragraph }
     }
 
     pub fn border_style(mut self, border_style: Style) -> Self {
         self.block = self.block.border_style(border_style);
-        self.paragraph = self.paragraph.block(self.block);
+        self.paragraph = self.paragraph.block(self.block.clone());
         self
     }
 
     pub fn style(mut self, style: Style) -> Self {
         self.block = self.block.style(style);
-        self.paragraph = self.paragraph.block(self.block);
+        self.paragraph = self.paragraph.block(self.block.clone());
         self
     }
 }
 
-impl<'a, 't, T> widgets::StatefulWidget for TextField<'a, 't, T>
-where
-    T: Iterator<Item = &'t Text<'t>>,
-{
+impl<'a> widgets::StatefulWidget for TextField<'a> {
     type State = TextFieldState;
 
     fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {

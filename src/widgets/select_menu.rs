@@ -4,26 +4,28 @@ use tui::{
     buffer::Buffer,
     layout::{Alignment, Margin, Rect},
     style::{Color, Style},
-    widgets::{self, Block, Borders, Clear, List, ListState, Paragraph, Text},
+    text::Text,
+    widgets::{self, Block, Borders, Clear, List, ListItem, ListState, Paragraph},
 };
 
-pub struct SelectMenuBox<'a, 't, S: 'a, T>
+pub struct SelectMenuBox<'a, S: 'a>
 where
     S: Clone + PartialEq + ToString,
-    T: Iterator<Item = &'t Text<'t>>,
 {
     active_border_style: Style,
     active_style: Style,
-    paragraph: Paragraph<'a, 't, T>,
+    paragraph: Paragraph<'a>,
     phantom_s: PhantomData<&'a S>,
 }
 
-impl<'a, 't, S, T> SelectMenuBox<'a, 't, S, T>
+impl<'a, S> SelectMenuBox<'a, S>
 where
     S: Clone + PartialEq + ToString,
-    T: Iterator<Item = &'t Text<'t>>,
 {
-    pub fn new(text: T) -> Self {
+    pub fn new<T>(text: T) -> Self
+    where
+        T: Into<Text<'a>>,
+    {
         Self {
             active_border_style: Style::default().fg(Color::Gray),
             active_style: Style::default().fg(Color::White).bg(Color::DarkGray),
@@ -48,10 +50,9 @@ where
     }
 }
 
-impl<'a, 't, S, T> widgets::StatefulWidget for SelectMenuBox<'a, 't, S, T>
+impl<'a, S> widgets::StatefulWidget for SelectMenuBox<'a, S>
 where
     S: Clone + PartialEq + ToString,
-    T: Iterator<Item = &'t Text<'t>>,
 {
     type State = SelectMenuState<S>;
 
@@ -77,21 +78,22 @@ where
     }
 }
 
-pub struct SelectMenuList<'a, L, S: 'a>
+pub struct SelectMenuList<'a, S: 'a>
 where
-    L: Iterator<Item = Text<'a>>,
     S: Clone + PartialEq + ToString,
 {
-    list: List<'a, L>,
+    list: List<'a>,
     phantom_s: PhantomData<&'a S>,
 }
 
-impl<'a, L, S> SelectMenuList<'a, L, S>
+impl<'a, S> SelectMenuList<'a, S>
 where
-    L: Iterator<Item = Text<'a>>,
     S: Clone + PartialEq + ToString,
 {
-    pub fn new(items: L) -> Self {
+    pub fn new<L>(items: L) -> Self
+    where
+        L: Into<Vec<ListItem<'a>>>,
+    {
         Self {
             list: List::new(items)
                 .block(
@@ -119,9 +121,8 @@ where
     }
 }
 
-impl<'a, L, S> widgets::StatefulWidget for SelectMenuList<'a, L, S>
+impl<'a, S> widgets::StatefulWidget for SelectMenuList<'a, S>
 where
-    L: Iterator<Item = Text<'a>>,
     S: Clone + PartialEq + ToString,
 {
     type State = SelectMenuState<S>;

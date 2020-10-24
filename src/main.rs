@@ -586,35 +586,20 @@ async fn main() -> anyhow::Result<()> {
                     ui_state: ui_state.clone(),
                 };
                 terminal
-                    .draw(|mut f| {
-                        ui::draw(&mut f, &app).expect("draw failed");
+                    .draw(|f| {
+                        ui::draw(f, &app).expect("draw failed");
+
+                        if let Some((cx, cy)) = *cursor_point {
+                            f.set_cursor(cx, cy);
+                        }
                     })
                     .unwrap();
-                if let Some((cx, cy)) = *cursor_point {
-                    execute!(
-                        terminal.backend_mut(),
-                        cursor::Show,
-                        cursor::EnableBlinking,
-                        cursor::MoveTo(cx, cy),
-                    )
-                    .unwrap();
-                } else {
-                    execute!(
-                        terminal.backend_mut(),
-                        cursor::Hide,
-                        cursor::DisableBlinking,
-                    )
-                    .unwrap();
-                }
             }
             _ => {}
         });
 
     let input_event_stream = EventStream::new()
-        .filter(|ev| match ev {
-            Ok(Event::Key(_)) | Ok(Event::Mouse(_)) => true,
-            _ => false,
-        })
+        .filter(|ev| matches!(ev, Ok(Event::Key(_)) | Ok(Event::Mouse(_))))
         .map(|ev| match ev {
             Ok(Event::Key(key_event)) => InputEvent::Key(key_event),
             Ok(Event::Mouse(mouse_event)) => InputEvent::Mouse(mouse_event),
