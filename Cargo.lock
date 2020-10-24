@@ -282,12 +282,9 @@ dependencies = [
 
 [[package]]
 name = "bimap"
-version = "0.4.0"
+version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "783204f24fd7724ea274d327619cfa6a6018047bb0561a68aadff6f56787591b"
-dependencies = [
- "cfg-if 0.1.10",
-]
+checksum = "43806ad6cd3dec8ef84ac19f35a7b0075aee8c8a913ffc3a09191e6d7131e781"
 
 [[package]]
 name = "bit-set"
@@ -591,11 +588,12 @@ dependencies = [
 
 [[package]]
 name = "error-chain"
-version = "0.11.0"
+version = "0.12.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff511d5dc435d703f4971bc399647c9bc38e20cb41452e3b9feb4765419ed3f3"
+checksum = "2d2f06b9cac1506ece98fe3231e3cc9c4410ec3d5b1f24ae1c8946f0742cdefc"
 dependencies = [
  "backtrace",
+ "version_check",
 ]
 
 [[package]]
@@ -2066,15 +2064,15 @@ dependencies = [
 
 [[package]]
 name = "strum"
-version = "0.18.0"
+version = "0.19.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "57bd81eb48f4c437cadc685403cad539345bf703d78e63707418431cecd4522b"
+checksum = "b89a286a7e3b5720b9a477b23253bc50debac207c8d21505f8e70b36792f11b5"
 
 [[package]]
 name = "strum_macros"
-version = "0.18.0"
+version = "0.19.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "87c85aa3f8ea653bfd3ddf25f7ee357ee4d204731f6aa9ad04002306f6e2774c"
+checksum = "e61bb0be289045cb80bfce000512e32d09f8337e54c186725da381377ad1f8d5"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -2095,9 +2093,9 @@ dependencies = [
 
 [[package]]
 name = "ta"
-version = "0.1.5"
+version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7ac24971ba937bd20ac591204c349879b76fd364110739a73ab573b447f4ddfa"
+checksum = "e47a117edfb1ce702251a46c171b8f1a182756650a7788ad8ad4fba4b20886e0"
 dependencies = [
  "error-chain",
 ]
