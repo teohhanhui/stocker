@@ -41,17 +41,16 @@ impl<'a> TextField<'a> {
 impl<'a> widgets::StatefulWidget for TextField<'a> {
     type State = TextFieldState;
 
-    fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
-        let paragraph = self.paragraph;
-
+    fn render(self, area: Rect, buf: &mut Buffer, _state: &mut Self::State) {
         widgets::Widget::render(Clear, area, buf);
-        widgets::Widget::render(paragraph, area, buf);
+        widgets::Widget::render(self.paragraph, area, buf);
     }
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct TextFieldState {
     pub active: bool,
+    pub cursor_offset: usize,
     pub value: String,
 }
 
@@ -67,7 +66,7 @@ impl TextFieldState {
         };
         let inner_area = text_field_area.inner(&border_margin);
 
-        let cx = inner_area.left() + self.value.chars().count() as u16;
+        let cx = inner_area.left() + self.cursor_offset as u16;
         let cy = inner_area.top();
 
         Some((cx, cy))

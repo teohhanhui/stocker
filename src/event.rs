@@ -9,7 +9,7 @@ use derivative::Derivative;
 use im::{hashmap, hashmap::HashMap};
 use log::debug;
 use reactive_rs::Stream;
-use std::{cell::RefCell, collections::VecDeque, rc::Rc};
+use std::{cell::RefCell, collections::VecDeque, iter, rc::Rc};
 use tui::layout::Rect;
 
 #[derive(Clone, Copy, Debug)]
@@ -30,9 +30,13 @@ pub enum ChartEvent {
 pub enum TextFieldEvent {
     Accept(String),
     Activate,
+    BackspacePastStart,
     Deactivate,
+    DeletePastEnd,
     Input(String),
     MoveCursor(usize),
+    MoveCursorPastEnd,
+    MoveCursorPastStart,
     Toggle,
 }
 
@@ -222,7 +226,7 @@ where
                             Some(TextFieldEvent::Activate),
                             TextFieldState {
                                 active: true,
-                                value: acc_text_field_state.value.clone(),
+                                ..acc_text_field_state.clone()
                             },
                             acc_saved_text_field_state.clone(),
                             *overlay_state,
@@ -241,21 +245,6 @@ where
 
                 match ev {
                     InputEvent::Key(KeyEvent { code, .. }) => match code {
-                        KeyCode::Backspace if acc_text_field_state.active => {
-                            let mut value = acc_text_field_state.value.clone();
-                            value.pop();
-                            let map_value_func = map_value_func.clone();
-                            let value = map_value_func(value);
-                            (
-                                Some(TextFieldEvent::Input(value.clone())),
-                                TextFieldState {
-                                    value,
-                                    ..*acc_text_field_state
-                                },
-                                acc_saved_text_field_state.clone(),
-                                *overlay_state,
-                            )
-                        }
                         KeyCode::Enter
                             if acc_text_field_state.active
                                 && !acc_text_field_state.value.is_empty() =>
@@ -275,6 +264,147 @@ where
                             acc_saved_text_field_state.clone(),
                             *overlay_state,
                         ),
+                        KeyCode::Backspace
+                            if acc_text_field_state.active
+                                && acc_text_field_state.cursor_offset == 0 =>
+                        {
+                            (
+                                Some(TextFieldEvent::BackspacePastStart),
+                                acc_text_field_state.clone(),
+                                acc_saved_text_field_state.clone(),
+                                *overlay_state,
+                            )
+                        }
+                        KeyCode::Backspace if acc_text_field_state.active => {
+                            let mut value = acc_text_field_state.value.clone();
+                            let cursor_offset = acc_text_field_state.cursor_offset;
+                            debug_assert!(cursor_offset > 0);
+                            if cursor_offset == value.chars().count() {
+                                value.pop();
+                            } else {
+                                value = value
+                                    .chars()
+                                    .take(cursor_offset - 1)
+                                    .chain(value.chars().skip(cursor_offset))
+                                    .collect();
+                            }
+                            let map_value_func = map_value_func.clone();
+                            let value = map_value_func(value);
+                            (
+                                Some(TextFieldEvent::Input(value.clone())),
+                                TextFieldState {
+                                    cursor_offset: cursor_offset - 1,
+                                    value,
+                                    ..*acc_text_field_state
+                                },
+                                acc_saved_text_field_state.clone(),
+                                *overlay_state,
+                            )
+                        }
+                        KeyCode::Delete
+                            if acc_text_field_state.active
+                                && acc_text_field_state.cursor_offset
+                                    == acc_text_field_state.value.chars().count() =>
+                        {
+                            (
+                                Some(TextFieldEvent::DeletePastEnd),
+                                acc_text_field_state.clone(),
+                                acc_saved_text_field_state.clone(),
+                                *overlay_state,
+                            )
+                        }
+                        KeyCode::Delete if acc_text_field_state.active => {
+                            let mut value = acc_text_field_state.value.clone();
+                            let cursor_offset = acc_text_field_state.cursor_offset;
+                            debug_assert!(cursor_offset < value.chars().count());
+                            value = value
+                                .chars()
+                                .take(cursor_offset)
+                                .chain(value.chars().skip(cursor_offset + 1))
+                                .collect();
+                            let map_value_func = map_value_func.clone();
+                            let value = map_value_func(value);
+                            (
+                                Some(TextFieldEvent::Input(value.clone())),
+                                TextFieldState {
+                                    value,
+                                    ..*acc_text_field_state
+                                },
+                                acc_saved_text_field_state.clone(),
+                                *overlay_state,
+                            )
+                        }
+                        KeyCode::Left
+                            if acc_text_field_state.active
+                                && acc_text_field_state.cursor_offset == 0 =>
+                        {
+                            (
+                                Some(TextFieldEvent::MoveCursorPastStart),
+                                acc_text_field_state.clone(),
+                                acc_saved_text_field_state.clone(),
+                                *overlay_state,
+                            )
+                        }
+                        KeyCode::Left if acc_text_field_state.active => {
+                            let cursor_offset = acc_text_field_state.cursor_offset;
+                            debug_assert!(cursor_offset > 0);
+                            (
+                                Some(TextFieldEvent::MoveCursor(cursor_offset - 1)),
+                                TextFieldState {
+                                    cursor_offset: cursor_offset - 1,
+                                    ..acc_text_field_state.clone()
+                                },
+                                acc_saved_text_field_state.clone(),
+                                *overlay_state,
+                            )
+                        }
+                        KeyCode::Right
+                            if acc_text_field_state.active
+                                && acc_text_field_state.cursor_offset
+                                    == acc_text_field_state.value.chars().count() =>
+                        {
+                            (
+                                Some(TextFieldEvent::MoveCursorPastEnd),
+                                acc_text_field_state.clone(),
+                                acc_saved_text_field_state.clone(),
+                                *overlay_state,
+                            )
+                        }
+                        KeyCode::Right if acc_text_field_state.active => {
+                            let cursor_offset = acc_text_field_state.cursor_offset;
+                            debug_assert!(
+                                cursor_offset < acc_text_field_state.value.chars().count()
+                            );
+                            (
+                                Some(TextFieldEvent::MoveCursor(cursor_offset + 1)),
+                                TextFieldState {
+                                    cursor_offset: cursor_offset + 1,
+                                    ..acc_text_field_state.clone()
+                                },
+                                acc_saved_text_field_state.clone(),
+                                *overlay_state,
+                            )
+                        }
+                        KeyCode::Home if acc_text_field_state.active => (
+                            Some(TextFieldEvent::MoveCursor(0)),
+                            TextFieldState {
+                                cursor_offset: 0,
+                                ..acc_text_field_state.clone()
+                            },
+                            acc_saved_text_field_state.clone(),
+                            *overlay_state,
+                        ),
+                        KeyCode::End if acc_text_field_state.active => (
+                            Some(TextFieldEvent::MoveCursor(
+                                acc_text_field_state.value.chars().count(),
+                            )),
+                            TextFieldState {
+                                cursor_offset: acc_text_field_state.value.chars().count(),
+                                ..acc_text_field_state.clone()
+                            },
+                            acc_saved_text_field_state.clone(),
+                            *overlay_state,
+                        ),
                         &key_code
                             if key_code == activation_hotkey && !acc_text_field_state.active =>
                         {
@@ -282,7 +412,7 @@ where
                                 Some(TextFieldEvent::Activate),
                                 TextFieldState {
                                     active: true,
-                                    value: acc_text_field_state.value.clone(),
+                                    ..acc_text_field_state.clone()
                                 },
                                 acc_saved_text_field_state.clone(),
                                 *overlay_state,
@@ -290,12 +420,23 @@ where
                         }
                         KeyCode::Char(c) if acc_text_field_state.active => {
                             let mut value = acc_text_field_state.value.clone();
-                            value.push(*c);
+                            let cursor_offset = acc_text_field_state.cursor_offset;
+                            if cursor_offset == value.chars().count() {
+                                value.push(*c);
+                            } else {
+                                value = value
+                                    .chars()
+                                    .take(cursor_offset)
+                                    .chain(iter::once(*c))
+                                    .chain(value.chars().skip(cursor_offset))
+                                    .collect();
+                            }
                             let map_value_func = map_value_func.clone();
                             let value = map_value_func(value);
                             (
                                 Some(TextFieldEvent::Input(value.clone())),
                                 TextFieldState {
+                                    cursor_offset: cursor_offset + 1,
                                     value,
                                     ..*acc_text_field_state
                                 },
@@ -327,7 +468,7 @@ where
                                     Some(TextFieldEvent::Activate),
                                     TextFieldState {
                                         active: true,
-                                        value: acc_text_field_state.value.clone(),
+                                        ..acc_text_field_state.clone()
                                     },
                                     acc_saved_text_field_state.clone(),
                                     *overlay_state,
@@ -354,7 +495,7 @@ where
                                     Some(TextFieldEvent::Activate),
                                     TextFieldState {
                                         active: true,
-                                        value: acc_text_field_state.value.clone(),
+                                        ..acc_text_field_state.clone()
                                     },
                                     acc_saved_text_field_state.clone(),
                                     *overlay_state,
