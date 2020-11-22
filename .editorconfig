@@ -20,8 +20,8 @@ trim_trailing_whitespace = false
 
 [*.rs]
 indent_style = space
-indent_style = 4
+indent_size = 4
 
 [*.toml]
 indent_style = space
-indent_style = 4
+indent_size = 4
