@@ -10,8 +10,6 @@ license = "MIT OR Apache-2.0"
 keywords = ["finance", "stocks", "dashboard"]
 categories = ["command-line-utilities", "visualization"]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [dependencies]
 anyhow = "1.0.32"
 argh = "0.1.4"
@@ -38,11 +36,14 @@ regex = "1.4.2"
 shrinkwraprs = "0.3.0"
 simplelog = "0.8.0"
 smol = "1.2.4"
-smol-potat = { git = "https://github.com/wusyong/smol-potat", rev = "517308e" }
+smol-potat = "1.1.0"
 strum = "0.20.0"
 strum_macros = "0.20.1"
-ta = "0.3.1"
+ta = "0.4.0"
 thiserror = "1.0.22"
 tui = { version = "0.13.0", default-features = false, features = ['crossterm'] }
 typenum = "1.12.0"
 yahoo-finance = "0.3.0"
+
+[patch.crates-io]
+smol-potat-macro = { git = "https://github.com/teohhanhui/smol-potat", branch = "fix/main-return-error" }

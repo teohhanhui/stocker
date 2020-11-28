@@ -150,7 +150,7 @@ fn draw_body<B: Backend>(
                         date_range.contains(&Utc.timestamp(*timestamp as i64, 0))
                     })
                 });
-                let mut bb = indicators::BollingerBands::new(*n as u32, *k as f64).unwrap();
+                let mut bb = indicators::BollingerBands::new(*n as usize, *k as f64).unwrap();
                 let (bb_upper_data, bb_middle_data, bb_lower_data) = indicator_prices_data.fold(
                     (vec![], vec![], vec![]),
                     |mut acc_data, (timestamp, data_item)| {
@@ -201,7 +201,7 @@ fn draw_body<B: Backend>(
                         date_range.contains(&Utc.timestamp(*timestamp as i64, 0))
                     })
                 });
-                let mut ema = indicators::ExponentialMovingAverage::new(*n as u32).unwrap();
+                let mut ema = indicators::ExponentialMovingAverage::new(*n as usize).unwrap();
                 let ema_data = indicator_prices_data
                     .map(|(timestamp, data_item)| (timestamp, ema.next(&data_item)))
                     .collect();
@@ -224,7 +224,7 @@ fn draw_body<B: Backend>(
                         date_range.contains(&Utc.timestamp(*timestamp as i64, 0))
                     })
                 });
-                let mut sma = indicators::SimpleMovingAverage::new(*n as u32).unwrap();
+                let mut sma = indicators::SimpleMovingAverage::new(*n as usize).unwrap();
                 let sma_data = indicator_prices_data
                     .map(|(timestamp, data_item)| (timestamp, sma.next(&data_item)))
                     .collect();
