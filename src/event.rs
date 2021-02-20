@@ -4,7 +4,7 @@ use crate::{
     widgets::{SelectMenuState, TextFieldState},
 };
 use bimap::BiMap;
-use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent};
+use crossterm::event::{KeyCode, KeyEvent, MouseButton, MouseEvent, MouseEventKind};
 use derivative::Derivative;
 use im::{hashmap, hashmap::HashMap};
 use log::debug;
@@ -109,7 +109,12 @@ where
                     debug!("key press grouped into overlay: {:?}", overlay);
                     overlay
                 }
-                InputEvent::Mouse(MouseEvent::Up(MouseButton::Left, x, y, _)) => {
+                InputEvent::Mouse(MouseEvent {
+                    kind: MouseEventKind::Up(MouseButton::Left),
+                    column: x,
+                    row: y,
+                    ..
+                }) => {
                     let overlay = ui_target_areas
                         .iter()
                         .find(|(_, area)| {
@@ -446,7 +451,12 @@ where
                         }
                         _ => noop(),
                     },
-                    &InputEvent::Mouse(MouseEvent::Up(MouseButton::Left, x, y, _)) => {
+                    &InputEvent::Mouse(MouseEvent {
+                        kind: MouseEventKind::Up(MouseButton::Left),
+                        column: x,
+                        row: y,
+                        ..
+                    }) => {
                         let _point = (x, y);
                         let hit = ui_target_areas.iter().find(|(_, area)| {
                             area.left() <= x
@@ -690,7 +700,12 @@ where
                             *overlay_state,
                         ),
                     },
-                    &InputEvent::Mouse(MouseEvent::Up(MouseButton::Left, x, y, _)) => {
+                    &InputEvent::Mouse(MouseEvent {
+                        kind: MouseEventKind::Up(MouseButton::Left),
+                        column: x,
+                        row: y,
+                        ..
+                    }) => {
                         let point = (x, y);
                         let hit = ui_target_areas.iter().find(|(_, area)| {
                             area.left() <= x

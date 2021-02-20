@@ -46,6 +46,7 @@ pub fn draw<B: Backend>(f: &mut Frame<B>, app: &App) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[allow(clippy::unnecessary_wraps)]
 fn draw_header<B: Backend>(
     f: &mut Frame<B>,
     App {
@@ -94,6 +95,7 @@ fn draw_header<B: Backend>(
     Ok(())
 }
 
+#[allow(clippy::unnecessary_wraps)]
 fn draw_body<B: Backend>(
     f: &mut Frame<B>,
     App { stock, ui_state }: &App,
@@ -333,6 +335,7 @@ fn draw_body<B: Backend>(
     Ok(())
 }
 
+#[allow(clippy::unnecessary_wraps)]
 fn draw_footer<B: Backend>(
     f: &mut Frame<B>,
     App { ui_state, .. }: &App,
@@ -439,6 +442,7 @@ fn draw_footer<B: Backend>(
     Ok(())
 }
 
+#[allow(clippy::unnecessary_wraps)]
 fn draw_overlay<B: Backend>(f: &mut Frame<B>, App { ui_state, .. }: &App) -> anyhow::Result<()> {
     let active_base_style = Style::default().fg(Color::White).bg(Color::DarkGray);
     let highlight_base_style = Style::default().fg(Color::Black).bg(Color::White);
@@ -583,6 +587,7 @@ fn draw_overlay<B: Backend>(f: &mut Frame<B>, App { ui_state, .. }: &App) -> any
     Ok(())
 }
 
+#[allow(clippy::unnecessary_wraps)]
 fn draw_debug<B: Backend>(
     f: &mut Frame<B>,
     App {

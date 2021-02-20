@@ -327,7 +327,7 @@ impl FromStr for Indicator {
                 value: n.to_owned(),
             })?;
             Ok(Indicator::SimpleMovingAverage(n))
-        } else if s == "" {
+        } else if s.is_empty() {
             Err(ParseIndicatorError::Empty)
         } else {
             Err(ParseIndicatorError::Invalid)
